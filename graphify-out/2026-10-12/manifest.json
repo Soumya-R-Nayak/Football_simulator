@@ -1,0 +1,122 @@
+{
+  "package.json": {
+    "mtime": 1791828768.2100606,
+    "seen": 1791828780.2715194,
+    "ast_hash": "990d1d6f59feacd77b55b0c4a4a4400f",
+    "semantic_hash": ""
+  },
+  "src/entities/PlayerEntity.js": {
+    "mtime": 1791828590.988122,
+    "seen": 1791828780.2715254,
+    "ast_hash": "b749cd5a37ebe8842123c9033cc47d70",
+    "semantic_hash": ""
+  },
+  "src/input/InputManager.js": {
+    "mtime": 1791828328.6331522,
+    "seen": 1791828780.2715285,
+    "ast_hash": "8070e006aa0c00b4d4a63d18a33cbece",
+    "semantic_hash": ""
+  },
+  "src/main.js": {
+    "mtime": 1791828556.3999157,
+    "seen": 1791828780.2715302,
+    "ast_hash": "186c34e1a203c81a0afe8c4890959544",
+    "semantic_hash": ""
+  },
+  "src/math/Vector2.js": {
+    "mtime": 1791817026.0704155,
+    "seen": 1791819244.817311,
+    "ast_hash": "a0b0415a076191a5de9d063ce11e5626",
+    "semantic_hash": "a0b0415a076191a5de9d063ce11e5626"
+  },
+  "src/physics/Ball.js": {
+    "mtime": 1791812850.7967377,
+    "seen": 1791819244.817312,
+    "ast_hash": "63b02c26ae4caa3355d21473134f267f",
+    "semantic_hash": "63b02c26ae4caa3355d21473134f267f"
+  },
+  "src/physics/DribbleController.js": {
+    "mtime": 1791828750.234472,
+    "seen": 1791828780.271538,
+    "ast_hash": "0707a68789c7082e36dd5cbcf8be0df9",
+    "semantic_hash": ""
+  },
+  "src/physics/Environment.js": {
+    "mtime": 1791799995.1915061,
+    "seen": 1791819244.8173141,
+    "ast_hash": "5a5f3ee43eadc41922e6312408473784",
+    "semantic_hash": "5a5f3ee43eadc41922e6312408473784"
+  },
+  "src/physics/Locomotion.js": {
+    "mtime": 1791820609.4795535,
+    "seen": 1791820795.797512,
+    "ast_hash": "6cf17594beffdc759a8cf5e458704392",
+    "semantic_hash": ""
+  },
+  "src/physics/Pitch.js": {
+    "mtime": 1791800011.0312998,
+    "seen": 1791819244.8173158,
+    "ast_hash": "fdf6e2ad2bda6110ff4c0b926343debf",
+    "semantic_hash": "fdf6e2ad2bda6110ff4c0b926343debf"
+  },
+  "src/renderer/Camera.js": {
+    "mtime": 1791816285.9192648,
+    "seen": 1791819244.8173168,
+    "ast_hash": "80e2e9ebc73228e8b4ffc934ab4ee19a",
+    "semantic_hash": "80e2e9ebc73228e8b4ffc934ab4ee19a"
+  },
+  "src/renderer/CanvasRenderer.js": {
+    "mtime": 1791828463.593047,
+    "seen": 1791828780.2715502,
+    "ast_hash": "cc0cbc3cf1b0048e95873c5f208a95ba",
+    "semantic_hash": ""
+  },
+  "src/ui/TelemetryHUD.js": {
+    "mtime": 1791828523.9156613,
+    "seen": 1791828780.2715514,
+    "ast_hash": "9002ec382832ea69b5a3b5829f039e28",
+    "semantic_hash": ""
+  },
+  "tests/dribble_physics.test.js": {
+    "mtime": 1791827060.197441,
+    "seen": 1791827080.2671115,
+    "ast_hash": "c5fa17a259e12ac52a14935351066071",
+    "semantic_hash": ""
+  },
+  "tests/manipulation_physics.test.js": {
+    "mtime": 1791824898.7287397,
+    "seen": 1791824924.4506652,
+    "ast_hash": "02b7bb266f7a5a5eb9bb3d8214821704",
+    "semantic_hash": ""
+  },
+  "tests/pes_mechanics.test.js": {
+    "mtime": 1791823575.9357336,
+    "seen": 1791823616.928959,
+    "ast_hash": "fd2d86650ca341866545f2d9aafb763f",
+    "semantic_hash": ""
+  },
+  "tests/slice1_physics.test.js": {
+    "mtime": 1791800278.080986,
+    "seen": 1791819244.8173225,
+    "ast_hash": "e1a0524ec0aec95aef4110e9f391c42b",
+    "semantic_hash": "e1a0524ec0aec95aef4110e9f391c42b"
+  },
+  "index.html": {
+    "mtime": 1791828505.7590783,
+    "seen": 1791828780.2715614,
+    "ast_hash": "c70e48830ccc10ce86b10dae2c7deedf",
+    "semantic_hash": ""
+  },
+  "src/physics/PassingController.js": {
+    "mtime": 1791828660.5135276,
+    "seen": 1791828780.271544,
+    "ast_hash": "657cccf82d95a0eb531eceb4026c9c92",
+    "semantic_hash": ""
+  },
+  "tests/passing_physics.test.js": {
+    "mtime": 1791828709.8173978,
+    "seen": 1791828780.2715566,
+    "ast_hash": "e8b85e36d7e8dcd43b61511840a44932",
+    "semantic_hash": ""
+  }
+}
