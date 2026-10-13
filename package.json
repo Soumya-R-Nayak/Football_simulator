@@ -4,7 +4,7 @@
   "description": "Realistic 2D tactical football simulation grounded in SI physics and sports science",
   "type": "module",
   "scripts": {
-    "test": "node tests/slice1_physics.test.js && node tests/dribble_physics.test.js && node tests/manipulation_physics.test.js && node tests/pes_mechanics.test.js && node tests/passing_physics.test.js && node tests/attributes_physics.test.js && node tests/training_course.test.js"
+    "test": "node tests/slice1_physics.test.js && node tests/dribble_physics.test.js && node tests/manipulation_physics.test.js && node tests/pes_mechanics.test.js && node tests/passing_physics.test.js && node tests/attributes_physics.test.js && node tests/training_course.test.js && node tests/sharp_turn_physics.test.js"
   },
   "license": "MIT"
 }

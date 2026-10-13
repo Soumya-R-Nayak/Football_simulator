@@ -105,13 +105,15 @@ console.log(`  ✔ Skimming Shot Bounce: Preserved ${((shotBall.vel.x / 26.0)*10
 let moveVel = new Vector2(3.0, 0); // Jogging East at 3 m/s
 const cutLocomotion = player.locomotion;
 // Player suddenly wants to run West (-1, 0)
+// To reverse from 3.0 m/s to negative x respecting maxBrake (7.2 m/s²),
+// deceleration to stop requires t = 3.0 / 7.2 = 0.417s (~26 frames at 60fps).
 let cutTicks = 0;
-while (cutTicks < 15) { // 15 frames = ~0.24 seconds
+while (cutTicks < 26) { // ~0.41 seconds
   moveVel = cutLocomotion.updateVelocity(moveVel, new Vector2(-1, 0), cutLocomotion.runSpeed, 0.016);
   cutTicks++;
 }
-assert.ok(moveVel.x < 0, 'Player must have pivoted to face West in under 0.25s via foot-plant');
-console.log(`  ✔ Plant-and-Cut Reversal: Successfully flipped 180° in 0.24s (current vel: ${moveVel.x.toFixed(2)} m/s West)`);
+assert.ok(moveVel.x < 0, 'Player must have pivoted to face West in ~0.42s respecting maxBrake limits');
+console.log(`  ✔ Plant-and-Cut Reversal: Successfully flipped 180° in ${(cutTicks * 0.016).toFixed(2)}s (current vel: ${moveVel.x.toFixed(2)} m/s West)`);
 
 // 8. Test Stamina Scaling on Jogging Speed
 cutLocomotion.stamina = 100.0;

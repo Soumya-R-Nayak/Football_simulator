@@ -252,13 +252,27 @@ export class PlayerEntity {
       this.lateralTorsoSway *= Math.max(0, 1.0 - dt * 16.0);
       this.torsoBankAngle *= Math.max(0, 1.0 - dt * 16.0);
 
-      // Normal Running Heading & Body Orientation
+      // Normal Locomotion Body Orientation (Separated from velocity direction)
+      const pivotRate = this.locomotion.pivotAngularVelocity || 22.0;
+
       if (newSpeed > 0.1) {
-        const targetAngle = this.vel.heading();
+        // Moving: body smoothly tracks velocity direction, with slight lookahead towards desired input direction
+        const velAngle = this.vel.heading();
+        let targetAngle = velAngle;
+        if (desiredDir && desiredDir.magnitudeSq() > 0.1) {
+          const inputAngle = desiredDir.heading();
+          let diffInput = inputAngle - velAngle;
+          while (diffInput < -Math.PI) diffInput += Math.PI * 2;
+          while (diffInput > Math.PI) diffInput -= Math.PI * 2;
+          // Lookahead lead into sharp turn (head/torso turns towards target up to 25% of deviation)
+          targetAngle = velAngle + diffInput * 0.25;
+        }
+
         let diff = targetAngle - this.heading;
         while (diff < -Math.PI) diff += Math.PI * 2;
         while (diff > Math.PI) diff -= Math.PI * 2;
-        this.heading += diff * Math.min(1.0, dt * 14.0);
+        const maxTurn = Math.min(Math.abs(diff), Math.max(14.0, pivotRate) * dt);
+        this.heading += Math.sign(diff) * maxTurn;
         this.faceLockHeading = this.heading;
 
         // Centripetal bank lean into turns: lean = (v² / R) / g
@@ -273,6 +287,16 @@ export class PlayerEntity {
         this.stepFrequency = 2.8 + (newSpeed / this.locomotion.sprintSpeed) * 1.6;
         this.gaitPhase = (this.gaitPhase + this.stepFrequency * Math.PI * 2 * dt) % (Math.PI * 2);
       } else {
+        // Stationary / low speed: allow player to pivot and orient body directly toward desired direction
+        if (desiredDir && desiredDir.magnitudeSq() > 0.1) {
+          const targetAngle = desiredDir.heading();
+          let diff = targetAngle - this.heading;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          const maxTurn = Math.min(Math.abs(diff), pivotRate * dt);
+          this.heading += Math.sign(diff) * maxTurn;
+          this.faceLockHeading = this.heading;
+        }
         this.bodyLean *= 0.85;
         this.torsoPitch *= 0.85;
       }

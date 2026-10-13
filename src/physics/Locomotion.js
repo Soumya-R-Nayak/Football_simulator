@@ -111,64 +111,44 @@ export class Locomotion {
       return new Vector2(0, 0);
     }
 
-    const targetHeading = desiredDir.heading();
-    let currentHeading = currentSpeed > 0.1 ? currentVel.heading() : targetHeading;
+    // Dynamic acceleration scaling based on stamina
+    this.currentMaxAccel = this.baseMaxAccel * (0.65 + 0.35 * (this.stamina / 100.0));
 
+    const targetHeading = desiredDir.heading();
+
+    // 2. Low-speed threshold: prevent division-by-zero or angular singularities near rest
+    if (currentSpeed < 0.05) {
+      const newSpeed = Math.min(desiredSpeed, currentSpeed + this.currentMaxAccel * dt);
+      return Vector2.fromAngle(targetHeading, newSpeed);
+    }
+
+    const currentHeading = currentVel.heading();
     let angleDiff = targetHeading - currentHeading;
     while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
     while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
     const absAngle = Math.abs(angleDiff);
 
-    // Dynamic acceleration scaling based on stamina
-    this.currentMaxAccel = this.baseMaxAccel * (0.65 + 0.35 * (this.stamina / 100.0));
+    // 3. Lateral Acceleration & Steering Constraint: a_perp = v * |omega| <= maxLatAccel
+    // The rate of change of the velocity vector is strictly bounded by available traction:
+    // |omega| <= maxLatAccel / v
+    const maxTurnRate = (this.maxLatAccel / currentSpeed) * dt;
+    const turnStep = Math.sign(angleDiff) * Math.min(absAngle, maxTurnRate);
+    const newHeading = currentHeading + turnStep;
 
-    // 2. Human Turn Mechanics: Plant-and-Cut vs. Shallow Curved Steering
-    // In human locomotion, players do NOT steer like airplanes with fixed turning radii.
-    // If turning sharp (> 55 degrees) or reversing direction (180 degrees):
-    if (absAngle > 0.95) { // > ~55 degrees (Sharp cut or reversal)
-      // At high sprint speeds (> 5.0 m/s), momentum forces a 2-3 step stutter-brake forward
-      // before the player can plant and drive in the reverse direction
-      if (currentSpeed > 2.0) {
-        // High-speed skid / stutter-brake along current momentum heading
-        const skidBrake = this.maxBrake * 1.35 * dt;
-        const newSpeed = Math.max(0, currentSpeed - skidBrake);
+    // 4. Longitudinal Momentum Management (Brake before / while redirecting):
+    // Smooth, continuous steering-dependent speed target:
+    // targetSpeed = desiredSpeed * ((1 + cos(absAngle)) / 2)^2
+    // - Straight line (theta = 0): factor = 1.0, flat zero derivative preserves sprint speed.
+    // - Cornering / cuts (theta > 0): smoothly reduces target speed to tighten turn radius and manage momentum.
+    // - Reversals (theta -> 180°): targetSpeed -> 0, causing the player to heavily brake forward momentum into a curved U-turn apex before accelerating in the reverse direction.
+    const cosAngle = Math.cos(absAngle);
+    const targetSpeed = desiredSpeed * Math.pow(0.5 * (1.0 + cosAngle), 2);
 
-        // Torso and hips begin pivoting toward target heading during skid
-        const pivotBase = (currentSpeed > 5.5 ? 7.5 : 13.0);
-        const agilityScale = this.attributes ? (this.attributes.agility / 14.0) : 1.0;
-        const pivotRate = pivotBase * agilityScale * dt;
-        const newHeading = currentHeading + Math.sign(angleDiff) * Math.min(absAngle, pivotRate);
-
-        return Vector2.fromAngle(newHeading, newSpeed);
-      } else {
-        // Forward speed scrubbed (< 2.0 m/s): cleat firmly planted, hips snap directly and push off!
-        const pivotRate = (this.pivotAngularVelocity || 22.0) * dt;
-        let newHeading = currentHeading + Math.sign(angleDiff) * Math.min(absAngle, pivotRate);
-        let newSpeed = Math.min(desiredSpeed, currentSpeed + this.currentMaxAccel * dt);
-
-        if (Math.abs(targetHeading - newHeading) < 0.4) {
-          newHeading = targetHeading;
-        }
-
-        return Vector2.fromAngle(newHeading, newSpeed);
-      }
-    }
-
-    // 3. Shallow Curve (< 55 degrees): Smooth progressive steering
-    let newHeading = currentHeading;
-    if (currentSpeed > 0.5) {
-      const maxTurnRate = (this.maxLatAccel / currentSpeed) * dt;
-      newHeading = currentHeading + Math.sign(angleDiff) * Math.min(absAngle, maxTurnRate);
-    } else {
-      newHeading = targetHeading;
-    }
-
-    // Longitudinal acceleration / braking
     let newSpeed = currentSpeed;
-    if (desiredSpeed > currentSpeed) {
-      newSpeed = Math.min(desiredSpeed, currentSpeed + this.currentMaxAccel * dt);
-    } else if (desiredSpeed < currentSpeed) {
-      newSpeed = Math.max(desiredSpeed, currentSpeed - this.maxBrake * dt);
+    if (targetSpeed > currentSpeed) {
+      newSpeed = Math.min(targetSpeed, currentSpeed + this.currentMaxAccel * dt);
+    } else if (targetSpeed < currentSpeed) {
+      newSpeed = Math.max(targetSpeed, currentSpeed - this.maxBrake * dt);
     }
 
     return Vector2.fromAngle(newHeading, newSpeed);
