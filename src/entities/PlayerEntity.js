@@ -55,6 +55,9 @@ export class PlayerEntity {
     // Telemetry properties
     this.currentAcceleration = 0.0;
     this.turningRadius = 0.0;
+    this._lastSpeed = 0.0;
+    this._movedThisFrame = false;
+    this.isCloseControlActive = false;
 
     // Trap & Hold State Machine
     this.isHoldingTrap = false;
@@ -186,8 +189,6 @@ export class PlayerEntity {
       }
     }
 
-    const prevSpeed = this.vel.magnitude();
-
     // 1. Position integration
     this.pos.x += this.vel.x * dt;
     this.pos.y += this.vel.y * dt;
@@ -196,11 +197,34 @@ export class PlayerEntity {
     this.pos = pitch.clampToPitch(this.pos, this.locomotion.radius + 0.1);
 
     const newSpeed = this.vel.magnitude();
-    this.currentAcceleration = (newSpeed - prevSpeed) / dt;
+    if (!this._movedThisFrame) {
+      this.currentAcceleration = (dt > 0 && typeof this._lastSpeed === 'number')
+        ? (newSpeed - this._lastSpeed) / dt
+        : 0.0;
+    }
+    this._movedThisFrame = false;
+    this._lastSpeed = newSpeed;
     this.turningRadius = this.locomotion.calculateTurningRadius(newSpeed);
 
     const distToBall = this.pos.dist(ball.pos);
-    const isCloseControl = (this.isHoldingTrap && !this.isBrakingToTrap) || (gait === 'JOCKEY' && this.isBallInTouchEnvelope(ball, 0.15));
+
+    // Hysteresis for close-control state in Jockey gait:
+    // Requires closer entry (padding 0.12) to activate, and looser exit (padding 0.32) to deactivate,
+    // preventing rapid boundary chatter during micro-touches.
+    const enterEnvelope = this.isBallInTouchEnvelope(ball, 0.12);
+    const exitEnvelope = this.isBallInTouchEnvelope(ball, 0.32);
+
+    if (gait === 'JOCKEY') {
+      if (!this.isCloseControlActive && enterEnvelope) {
+        this.isCloseControlActive = true;
+      } else if (this.isCloseControlActive && !exitEnvelope) {
+        this.isCloseControlActive = false;
+      }
+    } else {
+      this.isCloseControlActive = false;
+    }
+
+    const isCloseControl = (this.isHoldingTrap && !this.isBrakingToTrap) || this.isCloseControlActive;
     const isMoving = desiredDir && desiredDir.magnitudeSq() > 0.05;
 
     // 2. PES 2017 Rhythmic Hop Oscillator & Squaring Up
@@ -231,18 +255,33 @@ export class PlayerEntity {
         this.soleActiveFoot = Math.sin(this.hopPhase) >= 0 ? 'RIGHT' : 'LEFT';
       }
 
-      // Torso remains squared up to faceLockHeading (maintaining facing downfield / opponent)
-      if (desiredDir && desiredDir.magnitudeSq() > 0.1) {
-        const fwdDot = desiredDir.dot(facing);
-        if (fwdDot > 0.65) {
+      // Torso orientation in close control:
+      // In Trap Hold stance, torso remains squared up to faceLockHeading while rolling ball laterally.
+      // In Jockey gait close control, smoothly tracks desired movement direction without unnatural orientation locks.
+      if (this.isHoldingTrap) {
+        if (desiredDir && desiredDir.magnitudeSq() > 0.1) {
+          const fwdDot = desiredDir.dot(facing);
+          if (fwdDot > 0.65) {
+            const targetAngle = desiredDir.heading();
+            let diff = targetAngle - this.faceLockHeading;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            this.faceLockHeading += diff * Math.min(1.0, dt * 6.0);
+          }
+        }
+        this.heading = this.faceLockHeading;
+      } else {
+        if (desiredDir && desiredDir.magnitudeSq() > 0.1) {
           const targetAngle = desiredDir.heading();
-          let diff = targetAngle - this.faceLockHeading;
+          let diff = targetAngle - this.heading;
           while (diff < -Math.PI) diff += Math.PI * 2;
           while (diff > Math.PI) diff -= Math.PI * 2;
-          this.faceLockHeading += diff * Math.min(1.0, dt * 6.0);
+          const closeControlTurnRate = 12.0; // rad/s smooth pivot rate
+          const maxTurn = Math.min(Math.abs(diff), closeControlTurnRate * dt);
+          this.heading += Math.sign(diff) * maxTurn;
+          this.faceLockHeading = this.heading;
         }
       }
-      this.heading = this.faceLockHeading;
       this.bodyLean = this.torsoBankAngle;
       this.torsoPitch = 0.06;
     } else {
@@ -381,29 +420,53 @@ export class PlayerEntity {
 
     // Realistic Sprint Carrying Speed-Control Tradeoff:
     // When holding Sprint while actively carrying the ball (ball in forward reach),
-    // cap sprint speed to ~7.6 m/s (14% dribble control penalty).
-    // Only Knock-On bursts (knockOnSurgeTimer > 0) unleash full 8.8 m/s off-the-ball top speed!
-    if (activeGait === 'SPRINT' && this.knockOnSurgeTimer <= 0 && ball && this.isBallInTouchEnvelope(ball, 0.20)) {
-      targetSpeed = Math.min(targetSpeed, 7.6);
+    // cap sprint speed smoothly to ~7.6 m/s (14% dribble control penalty).
+    // Uses continuous proximity weighting to avoid step discontinuities and limit-cycle chatter.
+    if (activeGait === 'SPRINT' && this.knockOnSurgeTimer <= 0 && ball) {
+      const wCarry = this.getBallCarryingWeight(ball);
+      if (wCarry > 0) {
+        const sprintCarryCap = 7.6;
+        const cappedTarget = targetSpeed - wCarry * (targetSpeed - sprintCarryCap);
+        targetSpeed = Math.min(targetSpeed, cappedTarget);
+      }
     }
 
     // High Control Stride Harmonization:
     // When carrying the ball, ensure high-control players never sprint/run past the ball.
     // If the ball is close to the boots, match player pace to ball forward momentum until touched ahead!
-    if (ball && this.isBallInTouchEnvelope(ball, 0.15) && this.dribble.mode !== 'KNOCK_ON') {
-      const { fwd } = this.getBallLocalCoords(ball);
+    // Smoothly blends using a Hermite transition zone around fwdThreshold to prevent bang-bang chatter.
+    if (ball && this.dribble.mode !== 'KNOCK_ON') {
+      const { fwd, lat } = this.getBallLocalCoords(ball);
       const skillRating = (this.dribble && this.dribble.skillRating) || 75;
       const controlQuality = Math.max(0, Math.min(1.0, (skillRating - 40) / 59.0));
 
-      if (fwd < (0.32 + 0.10 * controlQuality) && fwd > -0.15) {
+      const fwdThreshold = 0.32 + 0.10 * controlQuality;
+      if (fwd > -0.15 && Math.abs(lat) < 0.70) {
         const ballForwardVel = ball.vel.dot(Vector2.fromAngle(this.heading));
         const effectiveBallVel = Math.max(0.0, ballForwardVel);
         const maxPace = effectiveBallVel + (0.42 + 0.30 * (1.0 - controlQuality));
-        targetSpeed = Math.min(targetSpeed, maxPace);
+
+        if (targetSpeed > maxPace) {
+          const lower = fwdThreshold - 0.10;
+          const upper = fwdThreshold + 0.10;
+          let blend = 0.0;
+          if (fwd <= lower) {
+            blend = 1.0;
+          } else if (fwd < upper) {
+            const u = (upper - fwd) / (upper - lower);
+            blend = u * u * (3.0 - 2.0 * u);
+          }
+          targetSpeed = targetSpeed - blend * (targetSpeed - maxPace);
+        }
       }
     }
 
+    const prevSpeed = this.vel.magnitude();
     this.vel = this.locomotion.updateVelocity(this.vel, desiredDir, targetSpeed, dt);
+    const newSpeed = this.vel.magnitude();
+    this.currentAcceleration = (dt > 0) ? (newSpeed - prevSpeed) / dt : 0.0;
+    this._movedThisFrame = true;
+    this._lastSpeed = newSpeed;
 
     // If holding trap, check if directional input is lateral to roll the ball to the side
     if (this.isHoldingTrap && desiredDir && desiredDir.magnitudeSq() > 0.1) {
@@ -434,6 +497,33 @@ export class PlayerEntity {
       fwd: dx * cosH + dy * sinH,
       lat: -dx * sinH + dy * cosH
     };
+  }
+
+  /**
+   * Smooth carrying weight for ball-proximity speed capping:
+   * Returns 1.0 when the ball is comfortably within the forward touch envelope,
+   * smoothly blends down to 0.0 in the transition zone outside the reach envelope,
+   * and 0.0 when the ball is trailing behind or knocked into open turf.
+   */
+  getBallCarryingWeight(ball) {
+    if (!ball) return 0.0;
+    const { fwd, lat } = this.getBallLocalCoords(ball);
+    if (fwd < -0.10) return 0.0;
+
+    const xc = 0.35;
+    const reachFwd = this.attributes ? this.attributes.footReachForward : 1.05;
+    const reachLat = this.attributes ? this.attributes.footReachLateral : 0.65;
+    const aFwd = (reachFwd - xc);
+    const aRear = 0.50;
+    const bLat = reachLat;
+    const xDiff = fwd - xc;
+    const a = (xDiff >= 0) ? aFwd : aRear;
+    const ellDist = Math.sqrt((xDiff * xDiff) / (a * a) + (lat * lat) / (bLat * bLat));
+
+    if (ellDist <= 1.0) return 1.0;
+    if (ellDist >= 1.6) return 0.0;
+    const u = (1.6 - ellDist) / 0.6;
+    return u * u * (3.0 - 2.0 * u);
   }
 
   /**

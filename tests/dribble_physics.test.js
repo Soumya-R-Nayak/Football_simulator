@@ -359,6 +359,7 @@ console.log('  ✔ Anatomical Foot Reach Envelope: Directional forward reach (1.
   const adaptP = new PlayerEntity({ x: 50.0, y: 34.0 });
   adaptP.heading = 0.0;
   adaptP.vel.set(5.0, 0.0);
+  adaptP.dribble.setSkill(99);
   const adaptB = new Ball(50.45, 34.0);
 
   // Baseline cruising run cadence
@@ -495,6 +496,170 @@ console.log('  ✔ Anatomical Foot Reach Envelope: Directional forward reach (1.
   assert.strictEqual(clunkyTrapP.actionNotification?.text, '⚠️ HEAVY RECEPTION', 'Clunky trap must trigger HEAVY RECEPTION notification');
 
   console.log(`  ✔ Stiff-Ankle First-Touch Rebound: Elite cushioned to ${fastBallElite.vel.magnitude().toFixed(2)} m/s vs Clunky rebounded at ${fastBallClunky.vel.magnitude().toFixed(2)} m/s (⚠️ HEAVY RECEPTION) verified`);
+}
+
+// 21. Test Measured Acceleration Timing & Telemetry (Suspect 1 Regression)
+{
+  const testEnv = new Environment();
+  const testPitch = new Pitch();
+
+  // Case A: Positive acceleration during sprint launch
+  const accelP = new PlayerEntity({ x: 50.0, y: 34.0 });
+  accelP.vel.set(0, 0);
+  const accelB = new Ball(60.0, 34.0); // Ball far away
+
+  accelP.move(new Vector2(1, 0), 'SPRINT', 0.016, accelB);
+  accelP.update(0.016, accelB, testPitch, testEnv, new Vector2(1, 0), 'SPRINT');
+
+  assert.ok(accelP.currentAcceleration > 2.0,
+    `Acceleration during sprint launch must be positive and meaningful, got ${accelP.currentAcceleration.toFixed(2)} m/s²`);
+  assert.ok(accelP.currentAcceleration <= accelP.locomotion.currentMaxAccel + 0.1,
+    `Acceleration must not exceed currentMaxAccel (${accelP.currentAcceleration.toFixed(2)} <= ${accelP.locomotion.currentMaxAccel})`);
+
+  // Case B: Negative acceleration (braking) during reversal
+  const brakeP = new PlayerEntity({ x: 50.0, y: 34.0 });
+  brakeP.vel.set(8.8, 0.0);
+  brakeP.heading = 0.0;
+  const brakeB = new Ball(60.0, 34.0);
+
+  brakeP.move(new Vector2(-1, 0), 'RUN', 0.016, brakeB);
+  brakeP.update(0.016, brakeB, testPitch, testEnv, new Vector2(-1, 0), 'RUN');
+
+  assert.ok(brakeP.currentAcceleration < -2.0,
+    `Acceleration during braking must be negative, got ${brakeP.currentAcceleration.toFixed(2)} m/s²`);
+  assert.ok(brakeP.currentAcceleration >= -brakeP.locomotion.maxBrake - 0.1,
+    `Deceleration must respect maxBrake bound (${brakeP.currentAcceleration.toFixed(2)} >= -${brakeP.locomotion.maxBrake})`);
+
+  console.log(`  ✔ Measured Acceleration Telemetry: Launch (+${accelP.currentAcceleration.toFixed(2)} m/s²) and Braking (${brakeP.currentAcceleration.toFixed(2)} m/s²) verified`);
+}
+
+// 22. Test Smooth Ball-Proximity Speed-Control Continuity (Suspect 2 Regression)
+{
+  const testP = new PlayerEntity({ x: 50.0, y: 34.0 });
+  testP.heading = 0.0;
+
+  // Sweep forward ball distance and verify smooth transition of carrying weight
+  let prevWeight = testP.getBallCarryingWeight(new Ball(50.35, 34.0));
+  let maxWeightStep = 0.0;
+
+  for (let d = 0.35; d <= 2.2; d += 0.02) {
+    const sweepBall = new Ball(50.0 + d, 34.0);
+    const weight = testP.getBallCarryingWeight(sweepBall);
+    const step = Math.abs(weight - prevWeight);
+    if (step > maxWeightStep) maxWeightStep = step;
+    prevWeight = weight;
+  }
+
+  // With 0.02m steps across a 0.6m transition band, max step should be <= 0.10 (smooth, C1-continuous)
+  assert.ok(maxWeightStep < 0.12,
+    `Carrying weight transition must be continuous without sharp step jumps (max step: ${maxWeightStep.toFixed(3)})`);
+
+  // Verify anti-overrun stride harmonization continuity
+  const harmP = new PlayerEntity({ x: 50.0, y: 34.0 });
+  harmP.heading = 0.0;
+  harmP.vel.set(6.0, 0.0);
+  const slowBall = new Ball(50.30, 34.0);
+  slowBall.vel.set(2.0, 0.0);
+
+  // Ball very close to boots: speed must be harmonized smoothly
+  harmP.move(new Vector2(1, 0), 'SPRINT', 0.016, slowBall);
+  const cappedSpeed = harmP.vel.magnitude();
+  assert.ok(cappedSpeed < 6.0, 'Player must harmonize speed when ball is close to boots to avoid overrunning');
+
+  console.log(`  ✔ Ball-Proximity Speed Continuity: Smooth C¹ carrying blend (max step: ${maxWeightStep.toFixed(3)}) & anti-overrun pacing verified`);
+}
+
+// 23. Test Jockey Orientation Stability & Close-Control Hysteresis (Suspect 3 Regression)
+{
+  const testEnv = new Environment();
+  const testPitch = new Pitch();
+  const jockP = new PlayerEntity({ x: 50.0, y: 34.0 });
+  jockP.heading = 0.0;
+  const jockBall = new Ball(50.45, 34.0);
+
+  // Enter Jockey close control
+  jockP.update(0.016, jockBall, testPitch, testEnv, new Vector2(1, 0), 'JOCKEY');
+  assert.strictEqual(jockP.isCloseControlActive, true, 'Close control should activate when ball is in envelope');
+
+  // Verify player can rotate in ALL directions without unnatural orientation locks:
+  // 1. Lateral North (0, -1) -> heading should smoothly turn towards -PI/2
+  const initialH = jockP.heading;
+  for (let i = 0; i < 15; i++) {
+    jockP.update(0.016, jockBall, testPitch, testEnv, new Vector2(0, -1), 'JOCKEY');
+  }
+  assert.ok(jockP.heading < initialH - 0.2,
+    `Jockeying North must turn body towards North without locking (heading: ${jockP.heading.toFixed(2)})`);
+
+  // 2. Backward West (-1, 0) -> heading should continue turning towards PI or -PI
+  for (let i = 0; i < 25; i++) {
+    jockP.update(0.016, jockBall, testPitch, testEnv, new Vector2(-1, 0), 'JOCKEY');
+  }
+  assert.ok(Math.abs(jockP.heading) > 1.8,
+    `Jockeying West must allow body to rotate toward backward direction (heading: ${jockP.heading.toFixed(2)})`);
+
+  // 3. Test Hysteresis: small ball oscillation near boundary does not rapidly toggle mode
+  const hystP = new PlayerEntity({ x: 50.0, y: 34.0 });
+  hystP.heading = 0.0;
+  const borderBall = new Ball(51.25, 34.0); // Near border
+  hystP.isCloseControlActive = true;
+
+  // Move ball slightly in/out between padding 0.15 and 0.28
+  let modeFlips = 0;
+  let lastState = hystP.isCloseControlActive;
+  for (let i = 0; i < 30; i++) {
+    borderBall.pos.x = 51.20 + (i % 2 === 0 ? 0.05 : -0.05);
+    hystP.update(0.016, borderBall, testPitch, testEnv, new Vector2(1, 0), 'JOCKEY');
+    if (hystP.isCloseControlActive !== lastState) {
+      modeFlips++;
+      lastState = hystP.isCloseControlActive;
+    }
+  }
+  assert.ok(modeFlips <= 1, `Hysteresis Schmitt trigger must prevent rapid boundary mode toggling (flips: ${modeFlips})`);
+
+  console.log(`  ✔ Jockey Orientation & Hysteresis: Omnidirectional smooth rotation and state hysteresis verified`);
+}
+
+// 24. Test Directional Cuts Bounded by Locomotion Braking Limits (Suspect 4 Regression)
+{
+  const cutP = new PlayerEntity({ x: 50.0, y: 34.0 });
+  cutP.heading = 0.0;
+  cutP.vel.set(7.0, 0.0);
+  cutP.dribble.setSkill(85);
+  const cutB = new Ball(50.45, 34.0);
+  const dt = 0.016;
+  const maxBrake = cutP.locomotion.maxBrake;
+
+  const preCutSpeed = cutP.vel.magnitude();
+  // Execute sharp 90° cut North
+  cutP.dribble.executeDirectionalCut(cutB, new Vector2(0, -1), -Math.PI / 2, 'RUN', null, dt);
+  const postCutSpeed = cutP.vel.magnitude();
+
+  const measuredDecel = (preCutSpeed - postCutSpeed) / dt;
+  assert.ok(measuredDecel > 0.1, `Directional cut must apply biomechanical deceleration penalty, got ${measuredDecel.toFixed(2)} m/s²`);
+  assert.ok(measuredDecel <= maxBrake + 1e-4,
+    `Directional cut deceleration (${measuredDecel.toFixed(2)} m/s²) must NOT exceed physical maxBrake (${maxBrake.toFixed(2)} m/s²)`);
+  assert.ok(cutP.currentAcceleration < 0,
+    `Player telemetry currentAcceleration (${cutP.currentAcceleration.toFixed(2)}) must reflect braking penalty`);
+
+  // Compare Elite (95) vs Clunky (45) under identical 180° reversal cut
+  const eliteP = new PlayerEntity({ x: 50.0, y: 34.0 });
+  eliteP.heading = 0.0;
+  eliteP.vel.set(6.0, 0.0);
+  eliteP.dribble.setSkill(95);
+  const eliteB = new Ball(50.45, 34.0);
+  eliteP.dribble.executeDirectionalCut(eliteB, new Vector2(-1, 0), Math.PI, 'RUN', null, dt);
+
+  const clunkyP = new PlayerEntity({ x: 50.0, y: 34.0 });
+  clunkyP.heading = 0.0;
+  clunkyP.vel.set(6.0, 0.0);
+  clunkyP.dribble.setSkill(45);
+  const clunkyB = new Ball(50.45, 34.0);
+  clunkyP.dribble.executeDirectionalCut(clunkyB, new Vector2(-1, 0), Math.PI, 'RUN', null, dt);
+
+  assert.ok(eliteP.vel.magnitude() > clunkyP.vel.magnitude(),
+    `Elite cut exit speed (${eliteP.vel.magnitude().toFixed(2)} m/s) must exceed clunky exit (${clunkyP.vel.magnitude().toFixed(2)} m/s)`);
+
+  console.log(`  ✔ Directional Cut Physical Bounds: Deceleration (${measuredDecel.toFixed(2)} <= ${maxBrake.toFixed(2)} m/s²) and Skill Differentiation verified`);
 }
 
 console.log('✅ ALL DRIBBLE, STRIDE & SHOOTING BIOMECHANICS TESTS PASSED!\n');

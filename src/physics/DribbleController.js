@@ -124,7 +124,7 @@ export class DribbleController {
       } else {
         // Player is moving -> execute controlled stride micro-touch
         pushDir.normalize();
-        this.executeMicroTouch(ball, pushDir, activeGait, environment);
+        this.executeMicroTouch(ball, pushDir, activeGait, environment, dt);
       }
     }
   }
@@ -185,7 +185,7 @@ export class DribbleController {
     this.triggerVfx(ball.pos);
   }
 
-  executeDirectionalCut(ball, desiredDir, angleDiff, gait, environment = null) {
+  executeDirectionalCut(ball, desiredDir, angleDiff, gait, environment = null, dt = 0.016) {
     const pSpeed = this.player.vel.magnitude();
     const attrs = (this.player && this.player.attributes) ? this.player.attributes : null;
     let controlQuality = Math.max(0, Math.min(1.0, (this.skillRating - 40) / 59.0));
@@ -214,10 +214,22 @@ export class DribbleController {
 
     // 2. Biomechanical Plant-and-Cut Deceleration Penalty:
     // Cutting sharply requires planting the support cleat and loading the knee/hip.
-    // Elite players (high Agility + Technique) retain 85-90% exit speed; clunky players brake hard.
+    // Must respect locomotion physical braking limits (bounded by maxBrake).
+    const maxBrake = (this.player && this.player.locomotion) ? this.player.locomotion.maxBrake : 6.8;
+    const effectiveDt = (typeof dt === 'number' && dt > 0) ? dt : 0.016;
+
+    // Deceleration demand scales with turn severity and entrance speed, modulated by technique/retention
     const turnSeverity = absTurn / Math.PI; // 0.16 to 1.0
-    const decelPercent = (0.05 + 0.16 * speedRatio * turnSeverity) * (1.20 - cutRetention * 0.50);
-    this.player.vel.multiply(Math.max(0.48, 1.0 - decelPercent));
+    const decelDemand = (0.35 + 0.65 * speedRatio * turnSeverity) * (1.20 - cutRetention * 0.50);
+    const decelRate = Math.min(maxBrake, maxBrake * Math.max(0.20, decelDemand));
+    const speedDrop = Math.min(pSpeed * 0.5, decelRate * effectiveDt);
+    const newSpeed = Math.max(0, pSpeed - speedDrop);
+    if (pSpeed > 1e-4) {
+      this.player.vel.multiply(newSpeed / pSpeed);
+    }
+    if (this.player) {
+      this.player.currentAcceleration = -decelRate;
+    }
 
     // 3. Assistive Cut Redirection:
     // Touch dispersion error scales with Technique and entrance speed
@@ -257,7 +269,7 @@ export class DribbleController {
     this.triggerVfx(ball.pos);
   }
 
-  executeMicroTouch(ball, desiredDir, gait, environment = null) {
+  executeMicroTouch(ball, desiredDir, gait, environment = null, dt = 0.016) {
     const pSpeed = this.player.vel.magnitude();
     const ballSpeed = ball.vel.magnitude();
     const skill = this.skillRating;
@@ -273,7 +285,7 @@ export class DribbleController {
 
     // If making a sharp directional cut (>= ~30° or 0.52 rad) while moving:
     if (absTurn >= 0.52 && pSpeed > 0.5 && this.mode !== 'KNOCK_ON') {
-      this.executeDirectionalCut(ball, desiredDir, angleDiff, gait, environment);
+      this.executeDirectionalCut(ball, desiredDir, angleDiff, gait, environment, dt);
       return;
     }
 
