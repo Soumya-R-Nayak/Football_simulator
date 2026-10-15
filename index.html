@@ -1,311 +1,472 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tactical 2D Football — SI Physics, Stride & Dribble Sandbox</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Realistic 2D Football Simulation</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      background-color: #0b150c;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    #viewport-container {
+      position: relative;
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #sim-canvas {
+      display: block;
+      background: #143818;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    }
+
+    /* ---------------- TELEMETRY HUD ---------------- */
+    #hud-overlay {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      width: 320px;
+      max-height: calc(100vh - 130px);
+      background: rgba(10, 20, 12, 0.88);
+      border: 1px solid rgba(80, 160, 90, 0.35);
+      border-radius: 8px;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #a3e635;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+      display: flex;
+      flex-direction: column;
+      z-index: 50;
+      transition: width 0.18s ease, max-height 0.18s ease, opacity 0.15s ease;
+      overflow: hidden;
+    }
+    #hud-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 10px;
+      background: rgba(18, 38, 22, 0.95);
+      border-bottom: 1px solid rgba(80, 160, 90, 0.3);
+      cursor: grab;
+      user-select: none;
+    }
+    #hud-header:active {
+      cursor: grabbing;
+    }
+    #hud-title-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .hud-drag-handle {
+      color: #4ade80;
+      opacity: 0.6;
+      font-size: 13px;
+      line-height: 1;
+    }
+    #hud-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: #ffffff;
+      letter-spacing: 0.6px;
+    }
+    .hud-badge {
+      font-size: 10px;
+      color: #86efac;
+      opacity: 0.75;
+      font-weight: normal;
+    }
+    #hud-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .hud-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(80, 160, 90, 0.4);
+      border-radius: 4px;
+      color: #86efac;
+      padding: 1px 7px;
+      font-size: 11px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .hud-btn:hover {
+      background: rgba(80, 160, 90, 0.35);
+      color: #ffffff;
+    }
+    #hud-collapsed-summary {
+      display: none;
+      padding: 5px 10px;
+      gap: 10px;
+      font-size: 11px;
+      background: rgba(12, 24, 14, 0.95);
+      border-top: 1px solid rgba(80, 160, 90, 0.2);
+    }
+    .compact-metric {
+      display: flex;
+      gap: 4px;
+    }
+    .compact-metric .lbl {
+      color: #86efac;
+    }
+    .compact-metric span:last-child {
+      color: #ffffff;
+      font-weight: bold;
+    }
+
+    #hud-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #hud-content::-webkit-scrollbar {
+      width: 4px;
+    }
+    #hud-content::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+    }
+    #hud-content::-webkit-scrollbar-thumb {
+      background: rgba(80, 160, 90, 0.4);
+      border-radius: 2px;
+    }
+    .hud-section {
+      border-bottom: 1px solid rgba(80, 160, 90, 0.15);
+      padding-bottom: 5px;
+    }
+    .hud-section:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .hud-section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 3px 6px;
+      margin: 2px 0 4px 0;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.04);
+      font-size: 11px;
+      font-weight: 700;
+      color: #f1f5f9;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+    .hud-section-header:hover {
+      background: rgba(80, 160, 90, 0.2);
+      color: #86efac;
+    }
+    .hud-toggle-icon {
+      font-size: 10px;
+      color: #86efac;
+      transition: transform 0.18s ease;
+    }
+    .hud-section.collapsed .hud-section-body {
+      display: none;
+    }
+    .hud-section.collapsed .hud-toggle-icon {
+      transform: rotate(-90deg);
+    }
+    .hud-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 1px 0;
+    }
+    .hud-label {
+      color: #86efac;
+    }
+    .hud-value {
+      font-weight: bold;
+      color: #ffffff;
+      text-align: right;
+    }
+    .hud-interactive {
+      cursor: pointer;
+      pointer-events: auto;
+      text-decoration: underline dotted;
+    }
+    .hud-interactive:hover {
+      color: #38bdf8 !important;
+    }
+    #hud-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 8px;
+      background: rgba(14, 28, 16, 0.95);
+      border-top: 1px solid rgba(80, 160, 90, 0.2);
+      font-size: 10px;
+      color: #94a3b8;
+    }
+    #hud-footer label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+    }
+    #hud-opacity-slider {
+      width: 55px;
+      height: 4px;
+      cursor: pointer;
+    }
+    #hud-reset-pos {
+      cursor: pointer;
+      color: #86efac;
+      text-decoration: underline;
+    }
+    #hud-reset-pos:hover {
+      color: #ffffff;
+    }
+
+    /* Collapsed & Compact State Modifiers */
+    #hud-overlay.hud-collapsed {
+      max-height: 38px;
+      width: auto;
+      min-width: 320px;
+    }
+    #hud-overlay.hud-collapsed #hud-content,
+    #hud-overlay.hud-collapsed #hud-footer {
+      display: none;
+    }
+    #hud-overlay.hud-collapsed #hud-collapsed-summary {
+      display: flex;
+    }
+    #hud-overlay.hud-compact .hud-row-detail {
+      display: none;
+    }
+
+    /* ---------------- SUB PANELS (GRAPH & CONTROLS) ---------------- */
+    .sub-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+      font-size: 11px;
+      font-weight: bold;
+      color: #a3e635;
+      user-select: none;
+    }
+    .mini-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(80, 160, 90, 0.35);
+      border-radius: 3px;
+      color: #86efac;
+      padding: 1px 6px;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .mini-btn:hover {
+      background: rgba(80, 160, 90, 0.3);
+      color: #ffffff;
+    }
+
+    #graph-container {
+      position: absolute;
+      bottom: 16px;
+      left: 16px;
+      width: 320px;
+      background: rgba(10, 20, 12, 0.88);
+      border: 1px solid rgba(80, 160, 90, 0.3);
+      border-radius: 8px;
+      padding: 6px 8px;
+      backdrop-filter: blur(4px);
+      z-index: 40;
+      transition: width 0.2s, height 0.2s;
+    }
+    #graph-container.collapsed #graph-canvas {
+      display: none;
+    }
+    #graph-container.collapsed {
+      width: auto;
+      padding: 4px 8px;
+    }
+    #graph-canvas {
+      width: 100%;
+      height: 94px;
+      display: block;
+    }
+
+    #controls-legend {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      background: rgba(10, 20, 12, 0.90);
+      border: 1px solid rgba(80, 160, 90, 0.3);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      line-height: 1.55;
+      color: #94a3b8;
+      backdrop-filter: blur(6px);
+      z-index: 40;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      max-width: 480px;
+      transition: all 0.2s ease;
+    }
+    #controls-legend.collapsed #controls-legend-content {
+      display: none;
+    }
+    #controls-legend.collapsed {
+      padding: 4px 8px;
+    }
+    #controls-legend kbd {
+      background: #1e293b;
+      border: 1px solid #475569;
+      border-radius: 3px;
+      padding: 1px 5px;
+      color: #f8fafc;
+      font-weight: bold;
+    }
+  </style>
 </head>
 <body>
-  <canvas id="gameCanvas"></canvas>
+  <div id="viewport-container">
+    <canvas id="sim-canvas"></canvas>
+    <div id="sim-toast" style="display: none; position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.94); border: 1px solid rgba(56, 189, 248, 0.7); border-radius: 6px; padding: 7px 16px; font-size: 13px; font-weight: bold; color: #f8fafc; pointer-events: none; z-index: 100; box-shadow: 0 4px 18px rgba(0,0,0,0.55); backdrop-filter: blur(5px); transition: opacity 0.3s ease;"></div>
 
-  <!-- Real-time Sports Science Telemetry Card -->
-  <aside id="telemetry-panel" class="telemetry-card">
-    <div class="card-header">
-      <h2>🔬 Physical Telemetry (SI Units)</h2>
-      <span class="badge">Stride & Dribble Sandbox</span>
-    </div>
-
-    <!-- 1. Player Movement & Biomechanics -->
-    <div class="metrics-section">
-      <div class="section-title">🏃 Player Biomechanics & Stride</div>
-      <div class="metric-row">
-        <span>Speed:</span>
-        <strong id="tel-p-speed">0.00 m/s (0.0 km/h)</strong>
-      </div>
-      <div class="metric-row">
-        <span>Acceleration:</span>
-        <strong id="tel-p-accel">0.00 m/s²</strong>
-      </div>
-      <div class="metric-row">
-        <span>Turning Radius:</span>
-        <strong id="tel-p-turn">0.0 m</strong>
-      </div>
-      <div class="metric-row">
-        <span>Stamina:</span>
-        <strong id="tel-p-stamina">100%</strong>
-      </div>
-      <div class="stamina-track">
-        <div id="tel-stamina-bar" class="stamina-fill"></div>
-      </div>
-      <div class="metric-row">
-        <span>Stance Balance:</span>
-        <strong id="tel-p-stance" style="color: #10b981;">100% (Optimal Balance)</strong>
-      </div>
-      <div class="metric-row">
-        <span>Active Player:</span>
-        <strong id="tel-active-player" style="color: #38bdf8;">#10 Striker [Tab to Switch]</strong>
-      </div>
-      <div class="metric-row">
-        <span>Build & Reach:</span>
-        <strong id="tel-p-profile" style="color: #93c5fd;">1.78m | 75.0kg (Reach: 2.45m)</strong>
-      </div>
-      <div class="metric-row" style="font-size: 0.82rem;">
-        <span>FM24 Phys:</span>
-        <strong id="tel-p-attrs" style="color: #facc15; font-size: 0.78rem;">PAC 14 | ACC 14 | AGI 14 | BAL 14 | JMP 14 | STA 14 | STR 14</strong>
-      </div>
-      <div class="metric-row">
-        <span>Pass Target:</span>
-        <strong id="tel-pass-target" style="color: #10b981;">None (Aim towards teammate)</strong>
-      </div>
-      <div class="metric-row">
-        <span>Action Buffer:</span>
-        <strong id="tel-p-buffer" style="color: #64748b;">None</strong>
-      </div>
-    </div>
-
-    <!-- 1.2 Slalom Training Obstacles & Cone Drills -->
-    <div class="metrics-section">
-      <div class="section-title">🚩 Training Obstacles & Cone Drills</div>
-      <div class="metric-row">
-        <span>Drill State:</span>
-        <strong id="tel-drill-status" style="color: #10b981;">ACTIVE (SLALOM)</strong>
-      </div>
-      <div class="card-actions" style="grid-template-columns: 1fr 1fr; margin-top: 4px;">
-        <button id="btn-toggle-drill" class="btn highlight active" title="Toggle 1-Player Obstacle Training Mode [G]">
-          🚩 Exit Slalom [G]
-        </button>
-        <button id="btn-reset-drill" class="btn" title="Reset player and ball to start of cone drill">
-          🔄 Reset to Start
-        </button>
-      </div>
-      <div class="metric-row preset-buttons" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-top: 4px;">
-        <button id="btn-course-slalom" class="btn active" title="8-Cone Straight Slalom Weave">Slalom</button>
-        <button id="btn-course-zigzag" class="btn" title="6-Cone Zigzag Plant-and-Cut Corridor">Zigzag</button>
-        <button id="btn-course-box" class="btn" title="5-Cone Agility Box Drill">Agility Box</button>
-      </div>
-    </div>
-
-    <!-- 1.4 FM24 Physical Attributes & Build Sliders -->
-    <div class="metrics-section" id="section-attributes-tuning">
-      <div class="section-title">🎛️ FM24 Physical Attributes & Build</div>
-
-      <!-- Quick Archetype Presets -->
-      <div class="metric-row preset-buttons" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-bottom: 4px;">
-        <button id="btn-arch-messi" class="btn active" title="Lionel Messi: 1.70m, 72kg, Supreme Agility & Balance">🐐 Messi</button>
-        <button id="btn-arch-haaland" class="btn" title="Erling Haaland: 1.95m, 88kg, Blistering Speed & Aerial Power">🤖 Haaland</button>
-        <button id="btn-arch-mbappe" class="btn" title="Kylian Mbappé: 1.78m, 75kg, 10m/s Pace & Acceleration">⚡ Mbappé</button>
-        <button id="btn-arch-modric" class="btn" title="Luka Modrić: 1.72m, 66kg, Elite Stamina & Agility">🪄 Modrić</button>
-        <button id="btn-arch-vandijk" class="btn" title="Virgil van Dijk: 1.93m, 92kg, Towering Strength & Reach">🧱 Van Dijk</button>
-        <button id="btn-arch-amateur" class="btn" title="Amateur: 1.78m, 80kg, Sluggish Physicals">👟 Amateur</button>
+    <div id="hud-overlay" class="hud-expanded">
+      <div id="hud-header">
+        <div id="hud-title-bar">
+          <span class="hud-drag-handle">⠿</span>
+          <span id="hud-title">TELEMETRY</span>
+          <span class="hud-badge">[H]</span>
+        </div>
+        <div id="hud-header-actions">
+          <button id="hud-compact-btn" class="hud-btn" title="Toggle Compact Mode (U)">Compact</button>
+          <button id="hud-collapse-btn" class="hud-btn" title="Collapse / Expand HUD (H)">−</button>
+        </div>
       </div>
 
-      <!-- Height & Weight -->
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Height:</span>
-        <strong id="val-height" style="color: #93c5fd; min-width: 50px;">1.70 m</strong>
-        <input type="range" id="slider-height" min="1.60" max="2.05" step="0.01" value="1.70">
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Weight:</span>
-        <strong id="val-weight" style="color: #93c5fd; min-width: 50px;">72.0 kg</strong>
-        <input type="range" id="slider-weight" min="55" max="100" step="0.5" value="72.0">
+      <!-- Quick summary strip shown when collapsed -->
+      <div id="hud-collapsed-summary">
+        <div class="compact-metric"><span class="lbl">V:</span> <span id="hud-mini-speed">0.0 m/s</span></div>
+        <div class="compact-metric"><span class="lbl">Gait:</span> <span id="hud-mini-gait">STAND</span></div>
+        <div class="compact-metric"><span class="lbl">Ball:</span> <span id="hud-mini-ball">0.0 m/s</span></div>
+        <div class="compact-metric"><span class="lbl">Pitch:</span> <span id="hud-mini-pitch">Tier 1</span></div>
       </div>
 
-      <!-- FM24 1-20 Physical Attributes -->
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Pace:</span>
-        <strong id="val-pace" style="color: #facc15; min-width: 25px;">16</strong>
-        <input type="range" id="slider-pace" min="1" max="20" step="1" value="16">
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Acceleration:</span>
-        <strong id="val-accel" style="color: #facc15; min-width: 25px;">19</strong>
-        <input type="range" id="slider-accel" min="1" max="20" step="1" value="19">
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Agility:</span>
-        <strong id="val-agility" style="color: #facc15; min-width: 25px;">20</strong>
-        <input type="range" id="slider-agility" min="1" max="20" step="1" value="20">
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Balance:</span>
-        <strong id="val-balance" style="color: #facc15; min-width: 25px;">20</strong>
-        <input type="range" id="slider-balance" min="1" max="20" step="1" value="20">
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Jumping:</span>
-        <strong id="val-jumping" style="color: #facc15; min-width: 25px;">8</strong>
-        <input type="range" id="slider-jumping" min="1" max="20" step="1" value="8">
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Stamina:</span>
-        <strong id="val-stamina" style="color: #facc15; min-width: 25px;">16</strong>
-        <input type="range" id="slider-stamina" min="1" max="20" step="1" value="16">
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Strength:</span>
-        <strong id="val-strength" style="color: #facc15; min-width: 25px;">12</strong>
-        <input type="range" id="slider-strength" min="1" max="20" step="1" value="12">
+      <div id="hud-content">
+        <!-- Section 1: Locomotion -->
+        <div class="hud-section" id="sec-locomotion">
+          <div class="hud-section-header">
+            <span>🏃 Biomechanical Locomotion</span>
+            <span class="hud-toggle-icon">▾</span>
+          </div>
+          <div class="hud-section-body">
+            <div class="hud-row"><span class="hud-label">Speed:</span><span id="hud-speed" class="hud-value">0.00 m/s</span></div>
+            <div class="hud-row"><span class="hud-label">Gait:</span><span id="hud-gait" class="hud-value">jog</span></div>
+            <div class="hud-row"><span class="hud-label">Cadence:</span><span id="hud-cadence" class="hud-value">0.0 Hz</span></div>
+            <div class="hud-row"><span class="hud-label">Step Stride:</span><span id="hud-stride" class="hud-value">0.00 m</span></div>
+            <div class="hud-row"><span class="hud-label">Phase:</span><span id="hud-phase" class="hud-value">flight</span></div>
+            <div class="hud-row"><span class="hud-label">Plant Foot:</span><span id="hud-foot" class="hud-value">none</span></div>
+            <div class="hud-row"><span class="hud-label">Footedness:</span><span id="hud-footedness" class="hud-value hud-interactive" title="Click or press 'F' to cycle foot dominance">Right [F] (Weak L: 1★)</span></div>
+            <div class="hud-row"><span class="hud-label">Archetype:</span><span id="hud-archetype" class="hud-value hud-interactive" title="Click or press 'P' to cycle archetype preset">Balanced Pro [P]</span></div>
+            <div class="hud-row"><span class="hud-label">Sprint Curve (κ):</span><span id="hud-curve" class="hud-value">0.00 (Controlled)</span></div>
+            <div class="hud-row hud-row-detail" style="font-size: 11px;"><span class="hud-label">Physicals:</span><span id="hud-attrs" class="hud-value" style="font-size: 11px;">SPD 80 | ACC 80 | AGI 80</span></div>
+            <div class="hud-row"><span class="hud-label">Cut Plant:</span><span id="hud-cut-plant" class="hud-value">Neutral</span></div>
+            <div class="hud-row"><span class="hud-label">Torso Facing:</span><span id="hud-facing" class="hud-value">0.0°</span></div>
+            <div class="hud-row hud-row-detail"><span class="hud-label">Position:</span><span id="hud-pos" class="hud-value">(0.0, 0.0) m</span></div>
+          </div>
+        </div>
+
+        <!-- Section 2: Ball Physics -->
+        <div class="hud-section" id="sec-ball">
+          <div class="hud-section-header">
+            <span>⚽ Aerodynamic Ball Physics</span>
+            <span class="hud-toggle-icon">▾</span>
+          </div>
+          <div class="hud-section-body">
+            <div class="hud-row"><span class="hud-label">Ball Model:</span><span id="hud-ball-model" class="hud-value hud-interactive" title="Click or press 'B' to cycle ball model">Modern Match [B]</span></div>
+            <div class="hud-row"><span class="hud-label">Ball Speed:</span><span id="hud-ball-speed" class="hud-value">0.00 m/s</span></div>
+            <div class="hud-row"><span class="hud-label">Altitude (Z):</span><span id="hud-ball-alt" class="hud-value">0.11 m</span></div>
+            <div class="hud-row"><span class="hud-label">Flight State:</span><span id="hud-ball-flight" class="hud-value" style="color: #4ade80;">AT_REST</span></div>
+            <div class="hud-row"><span class="hud-label">Atmospheric Wind:</span><span id="hud-wind" class="hud-value hud-interactive" title="Click or press 'V' to cycle atmospheric wind">0.0 m/s (Calm) [V]</span></div>
+            <div class="hud-row"><span class="hud-label">Aero Regime:</span><span id="hud-aero-regime" class="hud-value" style="color: #94a3b8;">SUBCRITICAL</span></div>
+            <div class="hud-row hud-row-detail" style="font-size: 11px;"><span class="hud-label">Spin:</span><span id="hud-ball-spin" class="hud-value" style="font-size: 11px;">0.0 rps (None) | 0.0 rps spin</span></div>
+          </div>
+        </div>
+
+        <!-- Section 3: Turf & Pitch -->
+        <div class="hud-section" id="sec-pitch">
+          <div class="hud-section-header">
+            <span>🌿 Turf & Traction Science</span>
+            <span class="hud-toggle-icon">▾</span>
+          </div>
+          <div class="hud-section-body">
+            <div class="hud-row"><span class="hud-label">Pitch Tier:</span><span id="hud-pitch-tier" class="hud-value hud-interactive" title="Click or press 'G' to cycle pitch quality tier">Tier 1: Elite Hybrid [G]</span></div>
+            <div class="hud-row"><span class="hud-label">Turf Pitch:</span><span id="hud-turf-cond" class="hud-value hud-interactive" title="Click or press 'T' to toggle pitch turf">Standard Pitch [T]</span></div>
+            <div class="hud-row"><span class="hud-label">Precipitation:</span><span id="hud-rain" class="hud-value hud-interactive" title="Click or press 'N' to cycle rainfall & drainage">0 mm/h (Dry) [N]</span></div>
+            <div class="hud-row"><span class="hud-label">Moisture:</span><span id="hud-moisture" class="hud-value hud-interactive" title="Click or press 'M' to cycle surface moisture / puddles">25% (Optimal Damp) [M]</span></div>
+            <div class="hud-row"><span class="hud-label">Grass Height:</span><span id="hud-grass-height" class="hud-value hud-interactive" title="Click or press '[' / ']' to adjust cutting height">24 mm (Regulation) [[]]</span></div>
+            <div class="hud-row"><span class="hud-label">Footwear Studs:</span><span id="hud-studs" class="hud-value hud-interactive" title="Click or press 'Y' to toggle FG plastic vs SG metal studs">FG Molded [Y]</span></div>
+            <div class="hud-row"><span class="hud-label">Traction Limit:</span><span id="hud-traction" class="hud-value" style="color: #4ade80;">Demand: 0.00 / 1.25 [SAFE]</span></div>
+            <div class="hud-row hud-row-detail"><span class="hud-label">Pitch Damage:</span><span id="hud-pitch-damage" class="hud-value hud-interactive" title="Click to simulate +30m match traffic (J), Shift+click or press 'C' to clear">0m | 0 divots, 0 ruts (0% wear) [J/C]</span></div>
+            <div class="hud-row"><span class="hud-label">Stamina / Drain:</span><span id="hud-stamina" class="hud-value" style="color: #4ade80;">100% (Drain: 1.00x)</span></div>
+          </div>
+        </div>
       </div>
 
-      <!-- FM24 1-20 Technical Attributes (Affecting Dribble & Reception) -->
-      <div style="font-weight: 700; font-size: 0.76rem; color: #38bdf8; margin: 8px 0 4px 0; text-transform: uppercase; letter-spacing: 0.05em;">
-        🎯 FM24 Technical Attributes
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">First Touch:</span>
-        <strong id="val-first-touch" style="color: #38bdf8; min-width: 25px;">20</strong>
-        <input type="range" id="slider-first-touch" min="1" max="20" step="1" value="20">
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Technique:</span>
-        <strong id="val-technique" style="color: #38bdf8; min-width: 25px;">20</strong>
-        <input type="range" id="slider-technique" min="1" max="20" step="1" value="20">
-      </div>
-      <div class="metric-row slider-row">
-        <span style="min-width: 90px;">Dribbling:</span>
-        <strong id="val-dribbling" style="color: #38bdf8; min-width: 25px;">20</strong>
-        <input type="range" id="slider-dribbling" min="1" max="20" step="1" value="20">
+      <!-- Quick Opacity & Scale Slider in footer -->
+      <div id="hud-footer">
+        <label title="Adjust Panel Transparency">Opacity: <input type="range" id="hud-opacity-slider" min="0.2" max="1.0" step="0.05" value="0.88"></label>
+        <span id="hud-reset-pos" title="Double-click header or click here to reset position">Reset Pos</span>
       </div>
     </div>
 
-    <!-- 1.5 Camera Angles, Pitch Layout & Height Zoom -->
-    <div class="metrics-section" id="section-camera-controls">
-      <div class="section-title">🎥 Camera Angles & View Height</div>
-      <div class="metric-row">
-        <span>Orientation:</span>
-        <strong id="tel-cam-orient" style="color: #38bdf8;">Horizontal (East-West)</strong>
+    <div id="graph-container">
+      <div class="sub-panel-header">
+        <span>Velocity Graph</span>
+        <button id="graph-toggle-btn" class="mini-btn" title="Toggle Speed Graph">−</button>
       </div>
-      <div class="metric-row preset-buttons" style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 4px;">
-        <button id="btn-cam-orient-horiz" class="btn active" title="Side-on Broadcast View [H]">↔️ Horizontal [H]</button>
-        <button id="btn-cam-orient-vert" class="btn" title="Goal-to-Goal Top-to-Bottom View [Y]">↕️ Vertical (Goal-to-Goal) [Y]</button>
-      </div>
-
-      <div class="metric-row" style="margin-top: 6px;">
-        <span>Camera Height (Zoom):</span>
-        <strong id="tel-cam-height-val" style="color: #10b981;">Close (1.6x)</strong>
-      </div>
-      <div class="metric-row preset-buttons" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-top: 4px;">
-        <button id="btn-cam-zoom-broadcast" class="btn" title="Broadcast High View (1.0x)">Broadcast</button>
-        <button id="btn-cam-zoom-tele" class="btn" title="Tele Mid View (1.35x)">Tele</button>
-        <button id="btn-cam-zoom-close" class="btn active" title="Close Ground View (1.85x)">Close</button>
-      </div>
-      <div class="metric-row slider-row" style="margin-top: 4px;">
-        <span style="min-width: 90px;">Height Zoom:</span>
-        <strong id="val-cam-height" style="color: #10b981; min-width: 40px;">1.6x</strong>
-        <input type="range" id="slider-cam-height" min="0.6" max="2.8" step="0.1" value="1.6">
-      </div>
+      <canvas id="graph-canvas" width="304" height="94"></canvas>
     </div>
 
-    <!-- 2. Discrete Micro-Touch Dribble & Control -->
-    <div class="metrics-section">
-      <div class="section-title">⚡ Discrete Micro-Touch Dribbling</div>
-      <div class="metric-row">
-        <span>Dribble Mode:</span>
-        <strong id="tel-dribble-mode" style="color: #38bdf8;">CRUISE</strong>
+    <div id="controls-legend">
+      <div class="sub-panel-header">
+        <span>🎮 Controls Legend</span>
+        <button id="controls-toggle-btn" class="mini-btn" title="Toggle Legend (?)">Hide (?)</button>
       </div>
-      <div class="metric-row">
-        <span>Ball State:</span>
-        <strong id="tel-ball-state">TOUCH CONTACT</strong>
-      </div>
-      <div class="metric-row slider-row">
-        <span>Dribble Rating:</span>
-        <strong id="dribble-skill-val" style="color: #60a5fa;">85 - Good Pro</strong>
-      </div>
-      <div class="metric-row preset-buttons" style="margin-top: 4px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px;">
-        <button id="btn-preset-messi" class="btn" title="Elite Close Control (99 Rating)">🐐 Messi 99</button>
-        <button id="btn-preset-pro" class="btn active" title="Competitive Pro (82 Rating)">⚡ Pro 82</button>
-        <button id="btn-preset-amateur" class="btn" title="Heavy Touch Amateur (50 Rating)">👟 Amateur 50</button>
-      </div>
-      <div class="metric-row" style="margin-top: 4px;">
-        <input type="range" id="skill-slider" min="40" max="99" step="1" value="85" style="width: 100%;">
+      <div id="controls-legend-content">
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move | <kbd>Shift</kbd> Sprint | <kbd>Z</kbd> Walk | <kbd>E</kbd> Slide</div>
+        <div><kbd>H</kbd> Toggle HUD | <kbd>U</kbd> Compact Mode | <kbd>O</kbd> Collider Debug | <kbd>?</kbd> Controls</div>
+        <div><kbd>P</kbd> Archetype | <kbd>F</kbd> Foot Dominance</div>
+        <div><kbd>B</kbd> Ball Model | <kbd>T</kbd> Turf Preset | <kbd>V</kbd> Wind Vector</div>
+        <div><kbd>G</kbd> Pitch Tier | <kbd>N</kbd> Rain / Drain | <kbd>M</kbd> Moisture | <kbd>J</kbd> +30m Wear</div>
+        <div><kbd>[</kbd> / <kbd>]</kbd> Grass Height | <kbd>Y</kbd> Studs (FG/SG) | <kbd>C</kbd> Clear Damage</div>
+        <div style="margin-top: 5px; border-top: 1px solid rgba(80, 160, 90, 0.3); padding-top: 5px; color: #38bdf8;">
+          <div><kbd>1</kbd> Ground Pass (14 m/s) | <kbd>2</kbd> Curving Free-Kick (24 m/s, +7 RPS)</div>
+          <div><kbd>3</kbd> Chipped Lob (16 m/s, +5.5 RPS) | <kbd>4</kbd> Trivela (-6 RPS)</div>
+          <div><kbd>5</kbd> Knuckleball Strike (28 m/s, 0 Spin - Try Jabulani!)</div>
+          <div><kbd>R</kbd> Reset Ball to Player | <kbd>Click Pitch</kbd> Kick to Cursor</div>
+        </div>
       </div>
     </div>
+  </div>
 
-    <!-- 3. Ball Dynamics -->
-    <div class="metrics-section">
-      <div class="section-title">⚽ Ball Dynamics (FIFA Size 5)</div>
-      <div class="metric-row">
-        <span>Ball Speed:</span>
-        <strong id="tel-b-speed">0.00 m/s (0.0 km/h)</strong>
-      </div>
-      <div class="metric-row">
-        <span>Elevation (Z):</span>
-        <strong id="tel-b-elev" style="color: #10b981;">0.00 m (Turf)</strong>
-      </div>
-      <div class="metric-row">
-        <span>Distance Rolled:</span>
-        <strong id="tel-b-dist">0.00 m</strong>
-      </div>
-      <div class="metric-row">
-        <span>Last Action / Kick:</span>
-        <strong id="tel-b-last-kick">None</strong>
-      </div>
-    </div>
-
-    <!-- 4. Environment & Calibration -->
-    <div class="metrics-section">
-      <div class="section-title">🌱 Environment & Turf</div>
-      <div class="metric-row">
-        <span>Turf State:</span>
-        <strong id="tel-turf">DRY (24mm, μr = 0.110)</strong>
-      </div>
-      <div class="metric-row">
-        <span>Wind Vector:</span>
-        <strong id="tel-wind">2.5 m/s @ 23°</strong>
-      </div>
-      <div class="metric-row">
-        <span>Camera View:</span>
-        <strong id="tel-cam">Follow Cam</strong>
-      </div>
-      <div class="metric-row slider-row">
-        <span>Wind Speed:</span>
-        <input type="range" id="wind-slider" min="0" max="15" step="0.5" value="2.5">
-      </div>
-    </div>
-
-    <!-- Quick Action Calibration Buttons -->
-    <div class="card-actions">
-      <button id="btn-switch-player" class="btn highlight" title="Switch active controlled player [Tab]">
-        🔄 Switch [Tab]
-      </button>
-      <button id="btn-drill-short" class="btn" title="Position teammate for 12m short passing drill">
-        🎯 12m Drill
-      </button>
-      <button id="btn-drill-long" class="btn" title="Position teammate for 25m through ball drill">
-        🚀 25m Drill
-      </button>
-    </div>
-    <div class="card-actions" style="margin-top: 4px;">
-      <button id="btn-toggle-turf" class="btn" title="Toggle between Dry, Wet, and Long grass [T]">
-        🌱 Toggle Turf [T]
-      </button>
-      <button id="btn-toggle-cam" class="btn" title="Switch between Follow and Full Pitch Cam [V]">
-        🎥 Camera [V]
-      </button>
-      <button id="btn-reset-ball" class="btn" title="Place ball back at player's feet [R]">
-        ⚽ Reset Ball [R]
-      </button>
-    </div>
-  </aside>
-
-  <!-- Controls Cheat-Sheet Bottom Banner -->
-  <footer id="controls-bar">
-    <div class="control-pill loc-pill">🏃 <b>W A C D</b>: Move (W Up, A Left, C Down, D Right)</div>
-    <div class="control-pill loc-pill" style="border-color: #38bdf8; color: #38bdf8;">🔄 <b>Tab</b>: Switch Active Player</div>
-    <div class="control-pill loc-pill"><b>Shift</b>: Sprint | <b>Shift-Shift / E</b>: Knock-On Burst</div>
-    <div class="control-pill loc-pill" style="border-color: #f43f5e; color: #f43f5e;">⚡ <b>Shift+Space</b>: Super Cancel</div>
-    <div class="control-pill loc-pill"><b>Space</b>: Jockey | <b>Shift (no move) / N</b>: Dummy Run</div>
-    <div class="control-pill ball-pill">⚽ <b>H</b>: Through Ball (Cone Assist / Lead Stride)</div>
-    <div class="control-pill ball-pill"><b>J</b>: Pass (Aim cone selects Teammate, auto-switches)</div>
-    <div class="control-pill ball-pill"><b>Hold K</b>: Shot (Variable Power) | <b>Space+K</b>: Finesse Curl</div>
-    <div class="control-pill ball-pill"><b>Hold M</b>: PES Real Touch (Hop & Roll) | <b>Shift</b>: Burst</div>
-    <div class="control-pill ball-pill"><b>I</b>: Lofted Pass / Chip / Clearance | <b>U</b>: Flick | <b>L</b>: Roll</div>
-    <div class="control-pill loc-pill" style="border-color: #10b981; color: #10b981;">🚩 <b>G</b>: Slalom Obstacle Drill</div>
-    <div class="control-pill sys-pill">🎥 <b>Y</b>: Angle (Goal-to-Goal) | <b>+ / -</b>: Zoom | <b>V</b>: Cam | <b>T</b>: Turf | <b>R</b>: Reset</div>
-  </footer>
-
-  <script type="module" src="src/main.js"></script>
+  <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

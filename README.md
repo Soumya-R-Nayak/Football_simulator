@@ -1,309 +1,381 @@
-# ⚽ Realistic 2D Football Simulation & Sports Science Sandbox
+# ⚽ Realistic 2D Football Simulation Engine
+### Physics-First, Biomechanically Grounded Association Football Simulation
 
-A high-fidelity, physics-first 2D football (soccer) simulation engine built from the ground up with **vanilla ES Modules** (zero runtime npm dependencies) and rendered onto an HTML5 Canvas.
+A deterministic, sports-science-driven football (soccer) simulation engine engineered in pure TypeScript. Built with a decoupled **fixed-timestep 120 Hz headless simulation core** and an interpolated **HTML5 Canvas renderer**.
 
-Unlike arcade football games where the ball is glued to player sprites via state magnets, this simulation is **grounded in real-world SI metric physics, sports biomechanics, Pro Evolution Soccer (PES) ball manipulation mechanics, and Football Manager (FM24) 1–20 attribute profiles**.
+Unlike arcade games that rely on artificial "magnetic glue" or pre-baked animation warps, this simulation is governed strictly by **ground reaction forces, inverted pendulum/spring-mass leg mechanics, Reynolds-number fluid aerodynamics, 3D Magnus effect tensors, and turf tribology**.
 
 ---
 
 ## 📑 Table of Contents
-1. [Core Design Philosophy](#-core-design-philosophy)
-2. [SI Metric Physics & Ball Aerodynamics](#-si-metric-physics--ball-aerodynamics)
-3. [Locomotion, Stride Biomechanics & Gait](#-locomotion-stride-biomechanics--gait)
-4. [Discrete Micro-Touch Dribbling & Plant-and-Cut](#-discrete-micro-touch-dribbling--plant-and-cut)
-5. [Ball Manipulation & PES 2017 Real Touch Mechanics](#-ball-manipulation--pes-2017-real-touch-mechanics)
-6. [Passing, Targeting AI & Receiving Engine](#-passing-targeting-ai--receiving-engine)
-7. [FM24 Biomechanical Attributes Profile](#-fm24-biomechanical-attributes-profile)
-8. [Training Sandbox & Obstacle Drills](#-training-sandbox--obstacle-drills)
-9. [Camera Projection, Views & Customization](#-camera-projection-views--customization)
-10. [Controls Cheat-Sheet](#-controls-cheat-sheet)
-11. [Project Structure & Architecture](#-project-structure--architecture)
-12. [Running & Testing](#-running--testing)
+1. [Core Architectural Principles](#-core-architectural-principles)
+2. [Simulation Roadmap & Slices](#-simulation-roadmap--slices)
+3. [Slice 1: Locomotion & Physical Attributes](#-slice-1-locomotion--physical-attributes)
+4. [Slice 2: 3D Aerodynamic Ball Physics Core](#-slice-2-3d-aerodynamic-ball-physics-core)
+5. [Ball Models & Presets (Jabulani, Telstar, etc.)](#-ball-models--presets)
+6. [Pitch Agronomy, Wear Grid & Biomechanical Slipping](#-pitch-agronomy-wear-grid--biomechanical-slipping)
+7. [Environmental Physics & Pitch Quality Tiers](#-environmental-physics--pitch-quality-tiers-empirical-agronomy)
+8. [Interactive Controls Cheat-Sheet](#-interactive-controls-cheat-sheet)
+9. [Directory Structure](#-directory-structure)
+10. [Getting Started & Testing](#-getting-started--testing)
+11. [Scientific Documentation](#-scientific-documentation)
 
 ---
 
-## 🔬 Core Design Philosophy
+## 🔬 Core Architectural Principles
 
-- **Zero "Glue" Physics**: The ball is always a 100% free rigid body with mass, radius, 3D elevation, angular spin, drag, and turf friction. Dribbling is simulated as periodic, discrete micro-kicks with realistic free-rolling phases where the ball can be tackled or intercepted.
-- **Anatomical Foot Reach Envelopes**: Players can only touch the ball where their boots can physically reach. Touching behind the heels or through body boundaries is impossible.
-- **PES Mechanical Depth**: Incorporates classic tactical mechanics inspired by *PES 2017 / PES 6*, such as R1/R2 *Super Cancel*, *Real Touch* hop-and-roll, stance quality degradation, one-touch action buffering, and dummy ball-runs.
-- **FM24 Attributes Integration**: Player movement, turning radii, burst acceleration, reception cushions, and shot dispersion are dynamically governed by FM24 1–20 physical and technical ratings modulated by height ($m$) and weight ($kg$).
-
----
-
-## 🌐 SI Metric Physics & Ball Aerodynamics
-
-All values in the simulation are modeled in standard International System of Units (SI: meters, seconds, kilograms, Newtons, radians).
-
-- **FIFA Quality Pro Ball Specifications**:
-  - Mass: $m = 0.430\text{ kg}$
-  - Circumference: $0.690\text{ m}$ (Radius $r = 0.110\text{ m}$)
-  - Cross-sectional Area: $A = \pi r^2 \approx 0.038\text{ m}^2$
-- **Atmospheric Drag & Wind Vectors**:
-  - Air density $\rho = 1.225\text{ kg/m}^3$
-  - Drag coefficient $C_d = 0.25$
-  - Aerodynamic drag force: $\mathbf{F}_{\text{drag}} = \frac{1}{2} \rho C_d A \|\mathbf{v}_{\text{rel}}\| \mathbf{v}_{\text{rel}}$
-  - Dynamic wind vector with periodic gust oscillation.
-- **Magnus Effect (Lateral Spin Swerve)**:
-  - Lift force: $\mathbf{F}_{\text{magnus}} = \frac{1}{2} \rho C_L A \|\mathbf{v}\|^2 (\hat{\boldsymbol{\omega}} \times \hat{\mathbf{v}})$
-  - Imparts genuine dipping arcs on finesse strikes and curving through balls.
-- **Ground Rolling Resistance & Turf Conditions**:
-  - Deceleration: $a_{\text{roll}} = \mu_r \cdot g$
-  - **Dry Pitch**: $\mu_r = 0.110 \implies a = 1.08\text{ m/s}^2$
-  - **Wet Pitch**: $\mu_r = 0.075 \implies a = 0.74\text{ m/s}^2$ (ball skims +40% further)
-  - **Long Grass**: $\mu_r = 0.180 \implies a = 1.77\text{ m/s}^2$ (rapid check-up)
-- **3D Vertical Ball Elevation & Bouncing**:
-  - Gravity: $g = 9.81\text{ m/s}^2$
-  - Grass coefficient of restitution: $e = 0.65$
-  - Backspin bite: backspin $\omega_y$ applies forward drag reduction in air and creates friction braking on turf contact.
+- **Zero "Magnetic Glue"**: The ball is a free 3D rigid body with mass, radius, inertia, 3D trajectory, rotational spin, drag, and turf friction. Dribbling and kicking occur purely through physical contacts and discrete stride impulses.
+- **Strict Simulation / Presentation Decoupling**:
+  - The core simulation (`src/sim/`) is 100% headless, deterministic, and free of any DOM, Canvas, or browser APIs. It runs at a fixed 120 Hz ($dt = 8.33\text{ ms}$).
+  - The renderer (`src/render/`) operates independently via `requestAnimationFrame`, smoothly interpolating player and ball states via sub-tick blending factor $\alpha \in [0, 1]$.
+- **Sports Science & Aerodynamic Rigor**:
+  - Locomotion models ground contact phases, Morin sprint acceleration lean, axial gaze anticipation, and outside-foot cut kinematics.
+  - Ball flight incorporates the Reynolds number **drag crisis**, asymmetric **knuckleball seam vortex shedding**, and non-linear **late-flight Magnus curl**.
+  - Pitch physics models real-world agronomy, grass blade shearing friction, live cleat traction limits, and dynamic divot tear mechanics.
 
 ---
 
-## 🏃 Locomotion, Stride Biomechanics & Gait
+## 🗺️ Simulation Roadmap & Slices
 
-Player movement models human locomotive limits rather than instant vector changes:
-
-- **WACD Ergonomic Locomotion**:
-  - Designed for comfortable, natural hand resting: **W** (Up), **A** (Left), **C / X** (Down), **D** (Right) using standard 4-finger resting posture. (Arrow keys and *S* are supported as fallbacks).
-- **Cleat Traction & Centripetal Turning Radius**:
-  - Maximum lateral acceleration: $a_{\text{lat}} = 7.2\text{ m/s}^2$ (further scaled by player Agility and height).
-  - High-speed turning radius: $R = \frac{v^2}{a_{\text{lat}}}$. At top sprint ($8.8\text{ m/s}$), turning radius is $\sim 10.76\text{ m}$, preventing instantaneous 90° arcade pivoting without braking.
-- **Longitudinal Acceleration & Cleat Braking**:
-  - Max sprint acceleration: up to $6.6\text{ m/s}^2$ (governed by Acceleration rating & power-to-weight ratio).
-  - Cleat braking deceleration: up to $-6.8\text{ m/s}^2$ with visible cleat skid damping.
-- **Stride Phases & Body Lean**:
-  - Animated alternating cleat articulation linked directly to gait frequency ($3.2\text{--}4.8\text{ Hz}$).
-  - Torso banking lean into sharp turns and forward pitch angle during sprints.
-- **Stamina & Aerobic Depletion**:
-  - Sprints consume stamina proportionally to work rate; exhaustion reduces top sprint speed down to a jog ($3.5\text{ m/s}$).
-  - Walking, jockeying, or idling rapidly regenerates aerobic reserve.
-
----
-
-## ⚡ Discrete Micro-Touch Dribbling & Plant-and-Cut
-
-- **Discrete Micro-Kick Engine**:
-  - The ball is nudged forward into a running stride pocket ($0.35\text{m} - 0.90\text{m}$ ahead). Between touches, the ball rolls freely on the turf, vulnerable to tackling and deflection.
-- **Anatomical Foot Reach Envelope**:
-  - Forward reach: up to $1.05\text{ m}$ ahead (scaled by leg length/height).
-  - Lateral reach: $0.65\text{ m}$ to either side.
-  - Behind heels: $0\text{ m}$ reach. If the ball drops behind the feet, it cannot be kicked forward without turning around.
-- **Anti-Overrun High-Control Protection**:
-  - High-control dribblers (Messi, Modrić) continuously monitor the ball's position relative to their strides, taking reactive chop-steps before the ball can slip behind their boots.
-- **Adaptive Stride Cadence**:
-  - **Deceleration / Traffic Chop-Steps**: In tight traffic or while braking, step frequency spikes to $4.5\text{--}5.5\text{ Hz}$, drawing the ball into a tight $0.35\text{ m}$ pocket.
-  - **Acceleration Elongation**: Accelerating into space opens stride time and pushes the ball further into stride.
-- **Plant-and-Cut Mechanics (90° Cuts & 180° Reversals)**:
-  - Initiating a sharp turn ($> 30^\circ$) triggers a physical plant-and-cut: the player plants their support cleat, absorbs momentum, and uses the outside/inside of the cutting boot to redirect the ball.
-  - Exit velocity and redirection accuracy scale directly with player **Agility** and **Technique**.
-- **Cleat Surface Spin Injection**:
-  - Alternating contacts impart realistic physical spin: Right boot touches apply clockwise spin ($\omega_z < 0$); Left boot touches apply counter-clockwise spin ($\omega_z > 0$).
-- **Knock-On Burst (Double-Tap Sprint or Key E)**:
-  - Propels the ball $4\text{--}6\text{ m}$ ahead into open turf and unleashes an uninhibited sprint burst.
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ SLICE 1: Biomechanical Locomotion & Physical Attributes   [COMPLETED] │
+│ • Inverted pendulum walking (v ≤ 2.1 m/s, 22% double support)          │
+│ • Spring-mass running flight (v > 2.1 m/s, stance compression Z)       │
+│ • Morin sprint forward lean & axial gaze precedence (60ms head lead)   │
+│ • Bilateral foot dominance (outside plant 130% vs inside check 35%)    │
+│ • 5 Athletic Archetypes & Continuous Sprint Curve Index (κ ∈ [-0.3,+0.3])│
+├────────────────────────────────────────────────────────────────────────┤
+│ SLICE 2: 3D Aerodynamics, Ball Presets & Pitch Agronomy   [COMPLETED] │
+│ • FIFA Regulation Size 5 3D trajectory (x, y on pitch, z altitude)     │
+│ • Dynamic Drag Crisis Cd(Re): subcritical (0.34) → supercritical (0.18)│
+│ • Chaotic Knuckleball Seam Aerodynamics (low-spin dipole wobbles)      │
+│ • Non-linear spin ratio S = rω/v producing dramatic "late curl"        │
+│ • Inelastic turf bounce decay & tangential spin-momentum exchange      │
+│ • Multi-Ball Models: Modern Match, Jabulani 2010, Telstar, Futsal, etc.│
+│ • Dynamic Turf Conditions: Standard, Wet Slick (watered), Dry Heavy    │
+│ • Grass Height Agronomy (18–36mm) & 0.5m Spatial Wear/Divot Grid       │
+│ • Dynamic Surface Moisture (10–90%), Standing Puddles & Hydroplaning   │
+│ • Controlled Ground Slides (E key) & Directional Cleat Rut Furrows     │
+│ • Pitch-Coupled Fatigue: Heavy mud/tall grass accelerates stamina drain │
+│ • Biomechanical Slipping (Traction Demand, FG vs SG Studs, Wipeout)   │
+├────────────────────────────────────────────────────────────────────────┤
+│ SLICE 3: First Touch & Ball Manipulation Physics         [NEXT UP]     │
+│ • Physical body & cleat collision cylinder (no phasing through ball)   │
+│ • Stride-cycle dribbling touches (tight walk/jog vs sprint knock-on)   │
+│ • First touch cushion physics based on Agility, Balance & Weak Foot    │
+│ • Contextual body shielding & ball trapping                            │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 🪄 Ball Manipulation & PES 2017 Real Touch Mechanics
+## 🏃 Slice 1: Locomotion & Physical Attributes
 
-- **Trap & Hold / PES Real Touch (Hold M)**:
-  - Cushions incoming or loose balls into a protected $0.65\text{ m}$ forward pocket.
-  - Switches the player into a squared-up hop-and-roll cadence ($3.8\text{ Hz}$ hop frequency, $4.2\text{ cm}$ vertical bounce).
-  - Supports lateral sole-rolls across the body (**A / D / L** keys) to shift angles around approaching defenders.
-  - Releasing **M** while holding **Sprint** unleashes an explosive $+2.4\text{ m/s}$ burst out of the stance.
-- **Directional Trapping**:
-  - Cushioning and redirecting incoming passes into space in a single fluid stride.
-- **Micro-Flick (Key U)**:
-  - Scoops the ball $0.73\text{--}0.81\text{ m}$ into the air to clear sliding leg tackles or set up volleys.
-- **Sole Drag-Back (Key J + Back)**:
-  - Rolls the ball $180^\circ$ backwards underneath the cleat studs at $3.2\text{ m/s}$.
-- **Chipped Scoop & Clearance (Key I / Shift + I)**:
-  - Variable-power lofted passes with physical backspin that bites upon hitting the grass.
-  - Shift + I triggers an emergency booming clearance ($26.0\text{ m/s}$, vertical velocity $11.0\text{ m/s}$).
-- **PES Super Cancel (Shift + Space)**:
-  - Instantly breaks out of any active shot charge, queued pass buffer, or locked animation, restoring immediate 100% manual locomotive control.
-- **PES Action Buffering**:
-  - Queue up one-touch passes, finesse shots, or clearances while the ball is still traveling toward the player.
-- **PES Dummy Reception (Shift with No Movement, or Key N)**:
-  - Lets an incoming pass roll through the player's legs without contact to wrong-foot defenders.
+### Biomechanical Locomotion Mechanics
+1. **Inverted Pendulum Walking ($v \le 2.1\text{ m/s}$)**:
+   - Zero flight phase; continuous double-support stance ($22\%$ overlap at heel strike).
+   - Pelvic rotation and sinusoidal lateral COM sway ($\pm 3.2\text{ cm}$).
+2. **Spring-Mass Flight Running ($v > 2.1\text{ m/s}$)**:
+   - Dynamic stance compression and ballistic airborne flight phase ($45\%$ of cycle).
+   - Cadence scales dynamically ($2.8\text{ Hz}$ jog $\rightarrow 4.4\text{ Hz}$ sprint).
+3. **Morin Sprint Acceleration Lean**:
+   - Low-speed blastoff forward pitch ($20.5\text{ cm}$ head forward offset) righting to an upright posture ($2.8\text{ cm}$) at high speed.
+4. **Axial Gaze Precedence**:
+   - Visual scanning anticipation: head yaw leads torso into turns by up to $16^\circ$ ($0.28\text{ rad}$) with a $\approx 60\text{ ms}$ anticipatory lead time.
+5. **Bilateral Foot Dominance & Weak-Foot Asymmetry**:
+   - Outside-foot plant produces $130\%$ maximum lateral grip impulse for explosive redirection.
+   - Inside check-step produces $35\%$ checked braking.
+   - Weak foot ability scales outside-foot grip from $84\%$ (1-star) to $100\%$ (5-star ambipedal).
 
----
+### Continuous Sprint Curve Index ($\kappa$)
+Rather than hardcoding arbitrary discrete speed boost modes, player acceleration profiles are modeled by a continuous **Sprint Curve Index ($\kappa \in [-0.30, +0.30]$)** derived from anthropometric power-to-weight leverage:
 
-## 🎯 Passing, Targeting AI & Receiving Engine
+$$a(v) = a_0 \cdot \left(1 - \frac{v}{v_{\text{max}}}\right) \cdot \left[1 + \kappa \cdot \left(1 - 2\frac{v}{v_{\text{max}}}\right)\right]$$
 
-- **Semi-Assisted Directional Passing Cone**:
-  - Scans teammates within a directional cone ($60^\circ$ cone window, up to $35\text{ m}$) along the player's stick/aim angle.
-  - Displays a real-time HUD targeting reticle and projected trajectory corridor.
-- **Friction-Compensated Velocity Tuning**:
-  - Calculates the exact release speed required so that after decelerating across turf friction ($\mu_r \cdot g$), the ball arrives at the receiver's feet at a comfortable reception velocity ($2.0\text{ m/s}$).
-- **Through Ball Lead Calculations**:
-  - Projects teammate velocity forward and leads the pass $3\text{--}7\text{ m}$ ahead into their stride.
-- **Automated Teammate Reception AI**:
-  - Off-ball receivers track incoming pass trajectories, orient their bodies to face the ball, cushion the incoming velocity with ankle compliance, and settle it into their stride pocket.
-- **Seamless Player Switching**:
-  - Pressing **Tab** or completing an assisted pass seamlessly transfers user control to the receiver.
+- **Explosive Burst ($\kappa > 0$)**: Front-loaded thrust for rapid initial blastoff ($0\text{--}15\text{ m}$).
+- **Controlled Linear ($\kappa = 0$)**: Standard elite linear force decay.
+- **Sustained Lengthy ($\kappa < 0$)**: Inverted pendulum mid-phase thrust sustained into top-speed sprinting ($20\text{--}40\text{ m}$).
+- **Energy Invariance Proof**: $\int_0^1 (1 - 2u)\,du = 0$ guarantees that $\kappa$ purely redistributes propulsive work across speed bands with zero synthetic energy inflation.
 
 ---
 
-## 🎛️ FM24 Biomechanical Attributes Profile
+## ⚽ Slice 2: 3D Aerodynamic Ball Physics Core
 
-Every player is powered by a Football Manager 2024 **1–20 attribute system** coupled with physical variables:
-
-### Morphological Variables:
-- **Height ($1.60\text{ m} - 2.05\text{ m}$)**:
-  - Affects Center of Mass ($CoM_z \approx 56\%$ of height) and rotational inertia ($I = m \cdot r^2$).
-  - Shorter players receive an **Agility & Balance bonus**; taller players gain **Aerial Reach** and forward stride envelope reach.
-- **Weight ($55\text{ kg} - 100\text{ kg}$)**:
-  - Modulates power-to-weight burst acceleration ($F = m \cdot a$) and physical shielding force ($150\text{ N} - 550\text{ N}$).
-
-### Core FM24 Attributes (1–20):
-| Attribute | Primary Biomechanical Effects |
-| :--- | :--- |
-| **Pace** | Max terminal sprint velocity ($5.4\text{ m/s}$ up to $10.0\text{ m/s}$ / $36\text{ km/h}$). |
-| **Acceleration** | Longitudinal burst rate ($2.4\text{ m/s}^2$ up to $6.6\text{ m/s}^2$), scaled by body mass. |
-| **Agility** | Lateral cleat traction ($4.2\text{--}9.6\text{ m/s}^2$) and hip pivot angular speed ($12\text{--}32\text{ rad/s}$). |
-| **Balance** | Stance stability floor ($0.38\text{--}0.85$) and off-balance shot/pass noise reduction. |
-| **Jumping** | Vertical leap ($0.20\text{ m} - 0.90\text{ m}$), determining total aerial reach with height. |
-| **Stamina** | Cardiovascular resistance to high-intensity sprint fatigue and aerobic recovery speed. |
-| **Strength** | Physical shielding dominance and collision impact resistance. |
-| **First Touch** | Ankle compliance coefficient ($e = 0.08$ velvet cushion vs $e = 0.50$ heavy rebound). |
-| **Technique** | Directional cut angle dispersion, plant-and-cut exit velocity retention, and outside-boot efficiency. |
-| **Dribbling** | Stride pocket tightness ($0.36\text{--}0.44\text{ m}$), stride cadence, and stumble suppression. |
-
-### Iconic Archetype Presets:
-- 🐐 **Lionel Messi**: $1.70\text{m}$, $72\text{kg}$ — Max Agility (20), Balance (20), First Touch (20), Technique (20), Dribbling (20).
-- 🤖 **Erling Haaland**: $1.95\text{m}$, $88\text{kg}$ — Blistering Pace (19), Strength (19), Aerial Reach ($2.78\text{m}$).
-- ⚡ **Kylian Mbappé**: $1.78\text{m}$, $75\text{kg}$ — Terminal $10\text{ m/s}$ Pace (20), Acceleration (20), Dribbling (19).
-- 🪄 **Luka Modrić**: $1.72\text{m}$, $66\text{kg}$ — Masterful Stamina (19), Agility (19), First Touch (19), Technique (20).
-- 🧱 **Virgil van Dijk**: $1.93\text{m}$, $92\text{kg}$ — Dominant Strength (20), Jumping Reach (19), High Aerial Denial.
-- 👟 **Amateur**: $1.78\text{m}$, $80\text{kg}$ — Heavy touches ($e = 0.50$), slow cadence ($1.8\text{ Hz}$), high dispersion noise.
+### Aerodynamics & Ball Trajectory
+- **Dynamic Drag Crisis ($C_d(Re)$)**:
+  Boundary layer transitions from laminar subcritical flow ($C_d \approx 0.32\text{--}0.38$) down to turbulent supercritical flow ($C_d \approx 0.15\text{--}0.22$) across critical speed $v_c$. Long strikes maintain piercing velocity initially, then brake abruptly as speed falls into the subcritical regime.
+- **Chaotic Knuckleball Seam Aerodynamics**:
+  When struck at high speed ($v > 18\text{ m/s}$) with near-zero rotational spin ($|\vec{\omega}| < 0.95\text{ RPS}$), boundary layer separation is dictated by the stitched seam profile, shedding vortices at Strouhal frequency ($f_{\text{St}} \approx 15\text{--}25\text{ Hz}$) that produce erratic mid-air lateral force wobbles.
+- **Non-Linear Spin Ratio ($S = \frac{r\omega}{v}$) & Late-Flight Curl**:
+  Lift coefficient $C_L(S) = \frac{S}{0.35 + 1.25S} \cdot C_{L,\text{max}} \cdot \text{magnusGain}$. As forward speed $v$ decelerates faster than spin decays, $S$ rises along the flight path, reproducing authentic late-curving free-kicks.
+- **Turf Restitution & Momentum Transfer**:
+  Normal bounce restitution ($e_{\text{turf}} = 0.65$) settles within 8 bounces. Tangential contact slip couples with rotational spin: topspin accelerates forward while backspin checks up on impact.
 
 ---
 
-## 🚩 Training Sandbox & Obstacle Drills
+## 🏆 Ball Models & Presets
 
-The simulation includes a dedicated **1-Player Obstacle Training Mode** featuring real-time collision cones and drills:
+Toggle active match balls via <kbd>B</kbd> or clicking the **Ball Model** HUD row:
 
-- **Drill Layouts**:
-  - **Slalom**: 8 cones spaced $2.5\text{ m}$ apart along midfield with dynamic S-curve guide lanes.
-  - **Zig-Zag**: 6 alternating cones configured for sharp 90° plant-and-cut maneuvers.
-  - **Agility Box**: 4 corner boundary cones with a central pivot obstacle.
-- **Obstacle Physics**:
-  - **Player-Cone Collisions**: Physical cylindrical boundary resolution with push-out and 75% brush velocity damping.
-  - **Ball-Cone Deflections**: Elastic bounce ($e = 0.68$) with directional deflection and spring-damped wobble animation.
-- **Drill Controls**:
-  - Toggle between 1-Player Drill Mode and 2-Player Match Mode using the **G** key or UI button.
-  - Instant reset back to the start gate using the **R** key.
+| Ball Model | Mass | Critical Speed ($v_c$) | Seam Volatility | Characteristics |
+| :--- | :---: | :---: | :---: | :--- |
+| **Modern Match** *(Nike Flight / Al Rihla)* | $0.430\text{ kg}$ | $19.5\text{ m/s}$ | Low ($0.20$) | Aerowsculpt micro-grooves. Balanced, predictable flight and sharp late-bend curl. |
+| **Adidas Jabulani** *(2010 World Cup)* | $0.438\text{ kg}$ | **$25.5\text{ m/s}$** | **High ($0.88$)** | Radically smooth 8-panel sphere. Delayed drag crisis and violent knuckleball swerve. |
+| **Classic Telstar** *(1970 32-Panel)* | $0.440\text{ kg}$ | $16.5\text{ m/s}$ | Minimal ($0.08$) | 32 hand-stitched panels. Early drag transition and rock-solid stable trajectories. |
+| **Futsal Pro** *(Low-Bounce)* | $0.445\text{ kg}$ | $18.0\text{ m/s}$ | Low ($0.15$) | Heavily damped restitution ($e = 0.42$), minimal bounce height, tight turf roll. |
+| **Retro 1966** *(Raw Heavy Leather)* | $0.468\text{ kg}$ | $17.0\text{ m/s}$ | Moderate ($0.18$) | Heavy 18-strip stitched leather with vintage laces and authentic thud. |
 
 ---
 
-## 🎥 Camera Projection, Views & Customization
+## 🌱 Pitch Agronomy, Wear Grid & Biomechanical Slipping
 
-The metric camera smoothly projects SI meters to canvas pixels with advanced framing and layout options:
+The pitch is not a static flat texture—it is a dynamic, living surface with agronomic properties, turf damage mechanics, and biomechanical traction limits.
 
-- **Orientation Modes**:
-  - **Horizontal Mode (↔️)**: Traditional side-on broadcast perspective (East-West).
-  - **Vertical Mode (↕️)**: Top-to-bottom goal-to-goal view (rotated $-90^\circ$). Ideal for forward dribbling drills and finishing practice.
-  - **Hotkey**: Toggle orientation anytime with **`Y`**.
-- **Zoom Heights & Levels**:
-  - **Broadcast** ($1.0\times$): High tactical view showing full attacking thirds.
-  - **Tele** ($1.35\times$): Balanced broadcast pitch view.
-  - **Close** ($1.85\times$ - Default): Intimate camera height where player footwork, ball spin, cones, and overhead badges are razor-sharp.
-  - **Height Slider / Hotkeys**: Continuously adjust height zoom from $0.6\times$ to $2.8\times$ using the UI slider or **`+`** / **`-`** keys.
-- **Overhead Player Notification Badges**:
-  - Displays high-contrast badges for special actions: `✨ VELVET FIRST TOUCH`, `⚡ OUTSIDE-BOOT CUT`, `180° REVERSAL`, `⚠️ HEAVY RECEPTION`, `⏳ BUFFER: THROUGH PASS`.
+### 1. Grass Cutting Height & Agronomy ($18\text{--}36\text{ mm}$)
+- **Ball Rolling Resistance**:
+  Ball rolling friction $\mu_{\text{roll}}(h)$ scales linearly with grass blade height:
+  $$\mu_{\text{roll}}(h) = \mu_{\text{base}} \cdot [1 + 0.035 \cdot (h - 24)]$$
+  Short tournament cuts ($20\text{ mm}$) yield fast, slick passing ($\approx 52\text{ m}$ roll distance), whereas tall unkept grass ($36\text{ mm}$) aggressively leeches kinetic energy ($\approx 36\text{ m}$ roll distance).
+- **Cleat Grip & Shearing**:
+  Turf shear strength peaks at regulation $24\text{ mm}$, falling off quadratically if cut too short (scalped roots) or overgrown:
+  $$f_{\text{grass}}(h) = 1.0 - 0.0008 \cdot (h - 24)^2$$
+
+### 2. Spatial Wear Grid ($0.5\text{ m}$ Cells) & Dynamic Divots
+- **High-Resolution Wear Grid**:
+  A compact $0.5\text{ m}$ resolution headless wear grid ($230 \times 156 = 35,880$ cells stored in a `Float32Array`) tracks surface degradation over time from footsteps and high-intensity maneuvers.
+- **Divot Formation**:
+  When a player executes an aggressive plant-and-cut turn ($\|\vec{a}\| > 7.5\text{ m/s}^2$) on damp or worn turf, the sod tears, excavating a persistent directional **divot scar** ($0.15\text{--}0.26\text{ m}$ radius) with an exposed soil core and displaced turf tufts.
+- **Divot Ball Collisions**:
+  Rolling balls crossing a divot undergo deterministic collision physics: the rim dip and lip eject the ball vertically ($\Delta v_z \approx 0.20\text{--}0.45\text{ m/s}$ micro-bob) and apply a lateral deflection twitch, transitioning rolling balls into a brief ballistic bounce.
+
+### 3. Biomechanical Traction Demand & Footwear Studs
+- **Traction Demand ($G$-forces)**:
+  $$\text{Demand} = \frac{\|\vec{a}_{\text{target}}\|}{g}$$
+- **Available Traction Limit ($TC_{\text{avail}}$)**:
+  $$TC_{\text{avail}} = 1.25 \cdot \text{TurfFactor} \cdot \text{StudFactor} \cdot f_{\text{grass}}(h) \cdot (1 - 0.45 \cdot \text{Wear}) \cdot \text{DivotPenalty}$$
+- **Footwear Stud Systems (<kbd>Y</kbd>)**:
+  - **Firm Ground (FG Plastic)**: Molded TPU studs for dry/standard pitches. On **Wet Slick** turf, grip degrades to $0.72\times$, causing severe loss of traction during sharp cuts.
+  - **Soft Ground (SG Metal)**: 6 long interchangeable aluminum/magnesium studs penetrate deep into saturated soil, holding $1.35\times$ grip on wet turf ($+35\%$ grip over baseline) to prevent slipping.
+- **Slip Severity Tiers**:
+  - **Micro-Slip** ($\text{Demand} \le 1.35 \cdot TC_{\text{avail}}$): An unstable stumble; propulsion force is clamped and the player quickly regains footing ($0.15\text{--}0.25\text{ s}$).
+  - **Wipeout** ($\text{Demand} > 1.35 \cdot TC_{\text{avail}}$): Complete catastrophic traction blowout; the player falls into an uncontrolled prone slide governed by body sliding friction ($\mu_{\text{slide}} = 0.35$). Prone recovery duration scales inversely with player **Balance** attribute ($50\text{ Balance} \approx 0.58\text{ s}$ vs. $95\text{ Balance} \approx 0.45\text{ s}$).
+
+### 4. Dynamic Surface Moisture, Standing Puddles & Ball Hydrodynamics
+- **Continuous Moisture Gradient ($m \in [0.10, 0.90]$)**:
+  Pitch surface moisture is tracked across the $0.5\text{ m}$ spatial grid. It can be cycled via <kbd>M</kbd> or HUD clicks across four distinct hydrological stages:
+  1. **Dry Turf ($10\%$)**: High friction, firm soil, zero standing water.
+  2. **Damp Turf ($30\%$)**: Ideal matchday pre-watered condition with balanced shear.
+  3. **Wet Slick ($65\%$)**: Surface saturated; slick passing skid, heightened traction hazard for FG studs.
+  4. **Waterlogged / Puddles ($90\%$)**: Extreme saturation with deep standing water pockets ($r = 2.4\text{--}4.5\text{ m}$) spawned dynamically in goalmouths, center circle, and touchlines.
+- **Hydrodynamic Displacement Drag & Hydroplaning**:
+  Rolling balls entering puddles ($m \ge 0.65$) experience fluid displacement resistance scaling with velocity squared ($F_{\text{water}} \propto v^2$), cutting roll distance drastically ($\approx 14\text{ m}$ vs $\approx 48\text{ m}$ on standard turf). High-speed passes ($v \ge 14\text{ m/s}$) trigger brief **hydroplaning skimming** where surface tension prevents immediate sinking before rapidly braking.
+- **Turf Splash Bounce Damping**:
+  Ball-turf impacts inside puddles experience water damping, lowering rebound apex by up to $35\%$ ($e_{\text{wet}} = e_{\text{base}} \cdot [1 - 0.35 \cdot (m - 0.65)]$).
+
+### 5. Controlled Ground Slide Mechanics & Directional Cleat Ruts (<kbd>E</kbd>)
+- **Controlled Slide Mechanics**:
+  Pressing <kbd>E</kbd> while moving at speed ($v > 2.8\text{ m/s}$) triggers an intentional ground slide tackle.
+  - Slide duration and travel distance are governed by turf kinetic friction $\mu_k$: slides extend up to $9.91\text{ m}$ on wet turf compared to $6.11\text{ m}$ on dry turf.
+  - The player's vertical center-of-mass drops into a prone posture ($-0.15\text{ m}$), with the torso leaning forward along the slide direction vector.
+- **Directional Cleat Rut Furrows**:
+  As the player's cleats drag through the pitch during a slide, they carve a persistent **Pitch Rut** ($0.18\text{ m}$ width, $0.03\text{ m}$ trench depth) with an exposed dark subsoil core and elevated displacement berms.
+- **Ball & Foot Traversal over Ruts**:
+  - Rolling balls crossing a cleat rut encounter vertical micro-bobs ($\Delta v_z \approx 0.16\text{--}0.36\text{ m/s}$) and deterministic angular deflection twitches.
+  - Sprinting players stepping on rut furrows suffer a $20\%$ traction penalty hazard, increasing slip probability.
+
+### 6. Pitch-Coupled Metabolic Work & Locomotion Fatigue
+- **Pitch Resistance Multiplier ($\Phi_{\text{pitch}}$)**:
+  Running on heavy mud, saturated soil, tall grass, or chewed-up turf requires significantly greater mechanical work per stride:
+  $$\Phi_{\text{pitch}} = 1.0 + 0.40 \cdot m + 0.35 \cdot \text{GrassWork} + 0.50 \cdot \text{Wear}$$
+  On waterlogged, unkept turf, the metabolic drain rate accelerates up to **$2.14\times\text{--}2.20\times$** baseline sprint expenditure.
+- **Fatigue Performance Degradation**:
+  When stamina drops below critical threshold ($< 0.35$):
+  - **Top Speed Clamping**: Degrades up to $18\%$ ($v_{\text{max}} = v_{\text{base}} \cdot [0.82 + 0.18 \cdot \frac{\text{stamina}}{0.35}]$).
+  - **Acceleration Penalty**: Propulsive thrust drops up to $22\%$.
+  - **Traction Stability Loss**: Muscular stabilizer fatigue penalizes available traction by $15\%$, making exhausted players more susceptible to slips.
 
 ---
 
-## ⌨️ Controls Cheat-Sheet
+## 🌍 Environmental Physics & Pitch Quality Tiers (Empirical Agronomy)
 
-| Key / Input | Action |
-| :--- | :--- |
-| **W, A, C / X, D** | **Ergonomic Locomotion** (W: Up, A: Left, C/X: Down, D: Right) |
-| **Shift** (Held) | **Sprint** (Consumes stamina, cleat skid braking) |
-| **Shift-Shift** / **E** | **Knock-On Burst** (Propels ball into space with sprint surge) |
-| **Space** (Held) | **Agile Jockey / Shield Stance** (Close control, nimble turns) |
-| **Shift + Space** | **PES Super Cancel** (Breaks shot charges, buffers, and stance locks) |
-| **Hold M** | **PES Real Touch / Trap & Hold** (Sole trap, hop-and-roll pace) |
-| **A / D / L** (while holding M) | **Lateral Sole Roll** (Rolls ball across cleats) |
-| **Shift** (while releasing M) | **Explosive Trap Burst** (Bursts out of sole trap into open space) |
-| **Shift (no move)** / **N** | **PES Dummy Run** (Lets incoming ball roll through legs) |
-| **J** | **Grounded Pass** (Aim cone targets teammate, auto-switches) |
-| **H** | **Through Ball** (Leads teammate into running corridor) |
-| **Hold K** | **Shot** (Variable power bar; release to strike) |
-| **Space + K** | **PES Finesse Shot** (Curling placed shot with dipping arc) |
-| **I** | **Lofted Pass / Chip / Clearance** (Shift + I for booming clearance) |
-| **U** | **Micro-Flick** (Scoops ball $0.75\text{ m}$ to clear tackles) |
-| **Tab** | **Switch Active Player** (Manual toggle between players) |
-| **G** | **Toggle Obstacle Drill** (Switch between 1P Drill & 2P Match) |
-| **R** | **Reset Drill / Ball** (Teleports to drill start line) |
-| **Y** | **Toggle Camera Orientation** (Side-on vs Goal-to-Goal) |
-| **+ / -** | **Camera Zoom In / Out** |
-| **V** | **Camera Mode** (Follow vs Full Pitch) |
-| **T** | **Toggle Turf State** (Dry, Wet, Long grass) |
-| **Left Click (Canvas)** | **Teleport Ball** to cursor position |
+Governed by empirical sports agronomy standards from the **Sports Turf Research Institute (STRI)**, the **USGA Green Section**, and the **FIFA Quality Programme for Football Turf**.
+
+### 1. Pitch Quality Tiers & Drainage Hydrology (<kbd>G</kbd>, <kbd>N</kbd>)
+Club finances and stadium infrastructure dictate the rootzone engineering and hydraulic evacuation capacity:
+- **Tier 1: Elite Hybrid Pitch (UEFA Champions League / Premier League)**:
+  - Engineered $95\%$ USGA silica sand rootzone reinforced with $5\%$ Desso GrassMaster / SISGrass stitched polyethylene fibers.
+  - SubAir active vacuum aeration drainage delivering **$80\text{ mm/h}$** extraction capacity ($50\text{ mm/h}$ gravity $+ 30\text{ mm/h}$ negative-pressure suction).
+  - Evacuates torrential downpours ($35\text{ mm/h}$) in real time with zero standing puddle accumulation ($<28\%$ moisture maintained).
+- **Tier 2: Professional Sand-Cap (Championship / Tier 2)**:
+  - Pure sand carpet with slotted lateral pipe drainage ($32\text{ mm/h}$ gravity percolation, $0\text{ mm/h}$ vacuum). Handles steady rain ($15\text{ mm/h}$) with minimal waterlogging.
+- **Tier 3: Semi-Pro Native Soil / Loam (League Two / Regional)**:
+  - Native sandy clay loam ($8.5\text{ mm/h}$ gravity percolation). Puddles begin forming during prolonged rainfall.
+- **Tier 4: Grassroots Heavy Clay (Sunday League / Public Park)**:
+  - Untreated native clay subsoil with zero sub-surface drainage ($0.8\text{ mm/h}$ gravity percolation).
+  - Rapidly floods into a boggy mudbath ($>70\%$ moisture) under rain, with persistent standing water in goalmouths.
+
+### 2. Ground Planarity & Micro-Topography Grid
+Pitches are not flat Euclidean planes:
+- **Multi-Octave Roughness**: A $0.5\text{ m}$ continuous heightfield synthesized via 3 deterministic spatial octaves:
+  - Macro undulations ($12\text{--}15\text{ m}$ wavelength, crown slope).
+  - Meso contours ($3\text{--}4\text{ m}$ wavelength, mown roller depressions).
+  - Micro bumps & hollows ($0.8\text{--}1.2\text{ m}$ wavelength).
+- **Roughness Amplitudes**:
+  - Tier 1 Elite: $4.5\text{ mm}$ peak-to-trough (carpet-flat billiard table).
+  - Tier 4 Clay: $32.0\text{ mm}$ peak-to-trough (bumpy park field).
+- **Slope Normal Vectors & Micro-Hops**:
+  - Surface normal $\vec{n} = \nabla z / \|\nabla z\|$ computed via central finite difference across neighbor cells.
+  - Rolling balls crossing an abrupt upward bump at speed ($v_{\text{slope}} > 0.12\text{ m/s}$) lift into realistic vertical micro-bobs and pop up into brief bounces.
+  - Downhill gravitational slope component accelerates or deflects slow-rolling passes.
+
+### 3. Atmospheric Wind Vector & Dynamic Aerodynamics (<kbd>V</kbd>)
+- **Relative Airspeed Vector ($\vec{v}_{\text{rel}} = \vec{v}_{\text{ball}} - \vec{v}_{\text{wind}}$)**:
+  - Aerodynamic drag and Magnus forces are strictly computed against relative airspeed rather than ground speed.
+- **Crosswind Drift**: A $7.0\text{ m/s}$ crosswind deflects a $40\text{ m}$ driven pass laterally by **$2.15\text{ m}$**.
+- **Headwind vs Tailwind Flight Carry**:
+  - Driven shot ($24\text{ m/s}$, $14^\circ$ elevation) into a $10\text{ m/s}$ headwind carries **$20.95\text{ m}$** before landing.
+  - The identical shot with a $10\text{ m/s}$ tailwind carries **$26.98\text{ m}$** ($+28.8\%$ distance carry).
+- **Dynamic Gust Turbulence**: Low-frequency sinusoidal gust modulation ($\pm 20\text{--}35\%$ volatility).
+
+### 4. Soil Compaction & Hardness (Clegg Impact Value - CIV)
+Measured via the standard 0.5 kg Clegg Impact Soil Tester (CIV in gravities $g_{10}$):
+- **Equilibrium Target**: Elite football target is **$70\text{--}90\text{ CIV}$**.
+- **Moisture-Compaction Dynamics**:
+  - Dehydrated summer clay shrinks and bakes into a rock-hard crust (**$110\text{--}130+\text{ CIV}$**).
+  - Saturated waterlogged clay plasticizes into soft spongy mud (**$30\text{--}45\text{ CIV}$**).
+  - Sand-based hybrid pitches (Tier 1) maintain tight stability (**$72\text{--}88\text{ CIV}$**).
+- **Restitution & Rolling Coupling**:
+  - Rebound height of a $2.0\text{ m}$ drop reaches **$1.126\text{ m}$** on baked hardpan vs. **$0.517\text{ m}$** in soft mud.
+  - Rolling distance increases by $+7\%$ on hardpan ($36.28\text{ m}$ vs $33.94\text{ m}$) due to minimal turf sinkage.
+- **Stud Bite**: Plastic FG studs cannot bite into baked hardpan ($\text{CIV} > 95$), while metal SG studs pierce the hard crust.
+
+### 5. Rootzone Shear Endurance & Dynamic Mudbath Degradation (<kbd>J</kbd>)
+- **Rootzone Shear Threshold**:
+  - Tier 1 Hybrid stitching resists up to **$13.5\text{ m/s}^2$** kinematic maneuver shear acceleration.
+  - Tier 4 Grassroots clay tears easily at **$5.2\text{ m/s}^2$**.
+- **Divot Geometry by Tier**:
+  - Hybrid pitches limit divots to minor surface scuffs ($r \approx 0.108\text{ m}$).
+  - Grassroots clay yields deep, torn sod craters ($r \approx 0.288\text{ m}$).
+- **90-Minute Match Traffic Simulation (<kbd>J</kbd>)**:
+  - Simulates spatial traffic wear across the central corridor ($\pm 30\text{ m}$), penalty spots, and goalmouths ($\pm 51.5\text{ m}$).
+  - Under wet conditions on clay, high-traffic goalmouths churn into full **mudbaths** ($100\%$ wear) that spawn standing water puddles.
 
 ---
 
-## 📂 Project Structure & Architecture
+## 🎮 Interactive Controls Cheat-Sheet
 
-```text
+| Control | Action | Details |
+| :---: | :--- | :--- |
+| <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> | **Locomotion** | Virtual analog vector steering with momentum conservation |
+| <kbd>Shift</kbd> | **Sprint** | Sprint blastoff lean, spring-mass flight running |
+| <kbd>Z</kbd> | **Walk** | Inverted pendulum walk, double support stance |
+| <kbd>Space</kbd> | **Jockey** | Locks torso facing orientation for backpedaling/defending |
+| <kbd>E</kbd> | **Controlled Slide** | Deliberate ground slide tackle (leaves cleat ruts; slides further on wet turf) |
+| <kbd>P</kbd> | **Cycle Archetype** | Balanced Pro $\rightarrow$ Explosive Agilist $\rightarrow$ Lengthy $\rightarrow$ Speed Demon $\rightarrow$ Heavy Anchor |
+| <kbd>F</kbd> | **Toggle Footedness** | Right-footed (Weak L 1★) $\rightarrow$ Left-footed (Weak R 1★) $\rightarrow$ Ambipedal (Both 5★) |
+| <kbd>G</kbd> | **Cycle Pitch Tier** | Tier 1 Elite Hybrid $\rightarrow$ Tier 2 Pro Sand $\rightarrow$ Tier 3 Semi-Pro $\rightarrow$ Tier 4 Grassroots Clay |
+| <kbd>N</kbd> | **Cycle Rainfall** | 0 mm/h (Dry) $\rightarrow$ 15 mm/h (Steady Rain) $\rightarrow$ 35 mm/h (Downpour) |
+| <kbd>V</kbd> | **Cycle Wind Vector** | Calm (0 m/s) $\rightarrow$ 6 m/s East $\rightarrow$ 9 m/s North $\rightarrow$ 13 m/s West Headwind |
+| <kbd>J</kbd> | **Match Traffic Wear** | Advances +30 minutes of progressive match traffic wear (spawns mudbaths in rain) |
+| <kbd>Y</kbd> | **Toggle Footwear Studs** | Firm Ground (FG Plastic) $\leftrightarrow$ Soft Ground (SG Metal) |
+| <kbd>[</kbd> / <kbd>]</kbd> | **Adjust Grass Height** | Decrease / Increase mowing height ($18\text{--}36\text{ mm}$, default $24\text{ mm}$) |
+| <kbd>M</kbd> | **Cycle Moisture** | 10% Dry $\rightarrow$ 30% Damp $\rightarrow$ 65% Wet Slick $\rightarrow$ 90% Standing Puddles |
+| <kbd>C</kbd> | **Clear Pitch Damage** | Erases all divots, ruts, puddles and resets wear grid to pristine turf |
+| <kbd>B</kbd> | **Cycle Ball Model** | Modern Match $\rightarrow$ Jabulani 2010 $\rightarrow$ Telstar 32 $\rightarrow$ Futsal $\rightarrow$ Retro Leather |
+| <kbd>T</kbd> | **Toggle Turf Condition** | Standard Pitch $\rightarrow$ Wet Slick (watered) $\rightarrow$ Dry Heavy Grass |
+| <kbd>1</kbd> | **Ground Pass** | $14\text{ m/s}$, $0^\circ$ elevation, flat turf roll |
+| <kbd>2</kbd> | **Curving Free-Kick** | $24\text{ m/s}$, $12^\circ$ elevation, $+7\text{ RPS}$ inside Magnus curl |
+| <kbd>3</kbd> | **Chipped Lob** | $16\text{ m/s}$, $28^\circ$ elevation, $+5.5\text{ RPS}$ backspin floating lift |
+| <kbd>4</kbd> | **Trivela Curve** | $22\text{ m/s}$, $10^\circ$ elevation, $-6\text{ RPS}$ outside boot curve |
+| <kbd>5</kbd> | **Knuckleball Strike** | $28\text{ m/s}$, $7.5^\circ$ elevation, $0\text{ spin}$ (test with Jabulani vs Telstar!) |
+| <kbd>R</kbd> | **Reset Ball** | Resets ball directly to player's feet at rest |
+| <kbd>Click Pitch</kbd> | **Kick to Cursor** | Distance-scaled pass/shot (<kbd>Shift</kbd>+Click = Curve, <kbd>Alt</kbd>+Click = Lob) |
+| <kbd>Scroll</kbd> | **Zoom Viewport** | Dynamic camera zoom ($16\text{--}64\text{ px/m}$) |
+
+---
+
+## 📁 Directory Structure
+
+```
 Football/
-├── index.html                   # UI layout, canvas container & telemetry cards
-├── style.css                    # Obsidian theme styling, scrollable telemetry HUD
-├── package.json                 # ES module package descriptor & test runner scripts
 ├── src/
-│   ├── main.js                  # Application bootloader, game loop & UI event bus
+│   ├── main.ts                    # Application bootstrap & tick-interpolated render loop
 │   ├── math/
-│   │   └── Vector2.js           # 2D Vector mathematics (chainable, zero-alloc methods)
-│   ├── physics/
-│   │   ├── Ball.js              # 3D ball rigid body, aerodynamics, drag & Magnus effect
-│   │   ├── Locomotion.js        # Cleat traction, acceleration, braking & turning radius
-│   │   ├── Pitch.js             # Official IFAB pitch dimensions & boundary clamping
-│   │   ├── Environment.js       # Turf friction models (Dry/Wet/Long) & wind gust vectors
-│   │   ├── PlayerAttributes.js  # FM24 1-20 attributes system with height/weight scaling
-│   │   ├── DribbleController.js # Discrete micro-touch cadence, cuts, & touch quality
-│   │   ├── PassingController.js # Assisted targeting cone, lead calculations & AI reception
-│   │   └── TrainingCourse.js    # Cones, obstacle layouts, collisions & course reset logic
-│   ├── entities/
-│   │   └── PlayerEntity.js      # Player state machine, body lean, traps & PES mechanics
-│   ├── input/
-│   │   └── InputManager.js      # WACD keyboard input, charge meters & super cancel
-│   ├── renderer/
-│   │   ├── Camera.js            # Metric-to-pixel projection, orientations & zoom height
-│   │   └── CanvasRenderer.js    # Articulated player rendering, pitch turf & HUD badges
-│   └── ui/
-│       └── TelemetryHUD.js      # Real-time SI telemetry and FM24 readout sync
-└── tests/                       # 100% Green Pure Node.js Test Suites
-    ├── slice1_physics.test.js       # IFAB pitch, rolling friction, aerodynamics & drag
-    ├── dribble_physics.test.js      # Discrete micro-touches, reach envelope & anti-overrun
-    ├── manipulation_physics.test.js # Trap & hold, sole rolls, micro-flicks & scoops
-    ├── pes_mechanics.test.js        # Super cancel, dummy runs, buffers & shot charging
-    ├── passing_physics.test.js      # Assisted targeting, lead vectors & AI reception
-    ├── attributes_physics.test.js   # FM24 attribute conversions & height/weight scaling
-    └── training_course.test.js      # Obstacle generation, cone collisions & resets
+│   │   ├── Vector2.ts             # 2D SI vector operations
+│   │   └── Vector3.ts             # 3D SI vector operations (cross product, lerp, clamp)
+│   ├── sim/                       # 100% Headless Deterministic Simulation Core (120 Hz)
+│   │   ├── SimulationCore.ts      # Master engine integrating player locomotion, ball & pitch
+│   │   ├── config.ts              # FIFA regulation dimensions, pitch constants, SI parameters
+│   │   ├── types.ts               # Contracts (PlayerState, BallState, BallModelConfig, TurfCondition, etc.)
+│   │   ├── locomotion/
+│   │   │   ├── LocomotionSystem.ts# Kinematic speed envelopes, plant-and-cut turning, Morin lean, slipping
+│   │   │   └── StrideEngine.ts    # Inverted pendulum stance & spring-mass airborne flight
+│   │   └── physics/
+│   │       ├── BallPhysics.ts     # 3D Aerodynamics, Drag Crisis, Knuckleball, Magnus & Turf
+│   │       └── PitchSurface.ts    # Grass agronomy, 0.5m wear grid, dynamic divot scars & collisions
+│   ├── render/                    # Presentation Layer (Decoupled from simulation)
+│   │   ├── CanvasRenderer.ts      # Pitch renderer, grass blades, divots, skid marks, 3D perspective
+│   │   └── TelemetryHUD.ts        # Biomechanical HUD telemetry, traction demand, speed graphs
+│   └── test/                      # Comprehensive Automated Vitest Test Suite (48 tests across 12 files)
+│       ├── pitch_tiers_and_drainage.test.ts # Darcy percolation, SubAir vacuum drainage, rain accumulation
+│       ├── pitch_topography_and_bobbles.test.ts # Multi-octave roughness, slope normals, micro-hops
+│       ├── atmospheric_wind_aerodynamics.test.ts # Wind vectors, crosswind deflection, carry modulation
+│       ├── soil_hardness_civ.test.ts      # Clegg Impact Value (CIV), restitution and rolling friction
+│       ├── rootzone_shear_and_mudbaths.test.ts # Root shear resistance, divot radius, match traffic wear
+│       ├── ball_physics.test.ts           # Drag crisis, bounce decay, knuckleball, turf conditions
+│       ├── pitch_and_slipping.test.ts     # Grass height, wear grid, divots, FG vs SG slipping & recovery
+│       ├── pitch_dynamics_and_movement.test.ts # Moisture puddles, slides, ruts, fatigue drain
+│       ├── attributes_and_curves.test.ts  # Continuous sprint curve index (κ) benchmarks
+│       ├── biomechanics_slice1.test.ts    # Stride phases, Morin lean, axial gaze precedence
+│       ├── locomotion_turns.test.ts       # Steering curves, outside plant-and-cut braking
+│       └── sprint40m.test.ts              # Calibrated 10m split and 40m sprint verification
+├── docs/                          # Scientific Papers & Architectural Specifications
+│   └── RESEARCH_PAPER_BIOMECHANICAL_LOCOMOTION.md # Peer-reviewed style whitepaper
+├── archive/                       # Archived Legacy Implementation & Historical Prototypes
+│   ├── README_legacy.md           # Original prototype documentation
+│   ├── src/                       # Legacy vanilla JS prototype files
+│   └── tests/                     # Legacy tests
+├── index.html                     # HTML5 Canvas viewport & HUD overlay layout
+├── package.json                   # Vite, Vitest & TypeScript configuration
+└── tsconfig.json                  # Strict TypeScript configuration
 ```
 
 ---
 
-## 🚀 Running & Testing
+## 🚀 Getting Started & Testing
 
-### 1. Launching Locally
-Because this project uses native browser ES Modules, serve it over any local HTTP server:
+### Prerequisites
+- [Node.js](https://nodejs.org/) (v18 or higher recommended)
+- `npm`
 
+### Installation
 ```bash
-# Using Python 3
-python3 -m http.server 8080
-
-# Or using Node.js
-npx serve -l 8080 .
+npm install
 ```
-Then navigate to: **`http://localhost:8080`**
 
-### 2. Running the Test Suite
-All physics and biomechanical calculations are accompanied by automated unit tests that run in pure Node.js with zero dependencies:
+### Development Server
+Starts the local development server with Vite hot module replacement:
+```bash
+npm run dev
+```
+Open [http://localhost:5173](http://localhost:5173) in your browser.
 
+### Running Automated Test Suite
+Runs all 48 unit tests across all 12 test files with Vitest:
 ```bash
 npm test
 ```
 
-All 7 test suites will execute and verify pitch geometry, ball roll standards, traction limits, micro-touch envelopes, PES mechanics, and FM24 attribute scalings.
+### Production Build
+Type-checks TypeScript and compiles production bundle:
+```bash
+npm run build
+```
+
+---
+
+## 📚 Scientific Documentation
+
+For a comprehensive, peer-reviewed-style whitepaper covering the mathematical derivations, inverted pendulum kinematics, spring-mass equations, and sprint curve proofs, see:
+* [RESEARCH_PAPER_BIOMECHANICAL_LOCOMOTION.md](file:///home/soumya/Desktop/Games/Football/docs/RESEARCH_PAPER_BIOMECHANICAL_LOCOMOTION.md)

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tactical 2D Football — Locomotion & Movement Engine</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- Real-time Sports Science Telemetry Card -->
+  <aside id="telemetry-panel" class="telemetry-card">
+    <div class="card-header">
+      <h2>🔬 Physical Telemetry (SI Units)</h2>
+      <span class="badge">Movement Engine Sandbox</span>
+    </div>
+
+    <!-- 1. Player Movement & Biomechanics -->
+    <div class="metrics-section">
+      <div class="section-title">🏃 Player Biomechanics & Locomotion</div>
+      <div class="metric-row">
+        <span>Speed:</span>
+        <strong id="tel-p-speed">0.00 m/s (0.0 km/h)</strong>
+      </div>
+      <div class="metric-row">
+        <span>Acceleration:</span>
+        <strong id="tel-p-accel">0.00 m/s²</strong>
+      </div>
+      <div class="metric-row">
+        <span>Turning Radius:</span>
+        <strong id="tel-p-turn">0.0 m</strong>
+      </div>
+      <div class="metric-row">
+        <span>Stamina:</span>
+        <strong id="tel-p-stamina">100%</strong>
+      </div>
+      <div class="stamina-track">
+        <div id="tel-stamina-bar" class="stamina-fill"></div>
+      </div>
+      <div class="metric-row">
+        <span>Active Player:</span>
+        <strong id="tel-active-player" style="color: #38bdf8;">#10 Lionel Messi</strong>
+      </div>
+      <div class="metric-row">
+        <span>Build & Reach:</span>
+        <strong id="tel-p-profile" style="color: #93c5fd;">1.70m | 72.0kg (Reach: 2.18m)</strong>
+      </div>
+      <div class="metric-row" style="font-size: 0.82rem;">
+        <span>FM24 Physicals:</span>
+        <strong id="tel-p-attrs" style="color: #facc15; font-size: 0.78rem;">PAC 16 | ACC 19 | AGI 20 | BAL 20 | STR 12 | JMP 8 | STA 16</strong>
+      </div>
+    </div>
+
+    <!-- 1.2 Slalom Training Obstacles & Cone Drills -->
+    <div class="metrics-section">
+      <div class="section-title">🚩 Training Obstacles & Cone Drills</div>
+      <div class="metric-row">
+        <span>Drill State:</span>
+        <strong id="tel-drill-status" style="color: #10b981;">ACTIVE (SLALOM)</strong>
+      </div>
+      <div class="card-actions" style="grid-template-columns: 1fr 1fr; margin-top: 4px;">
+        <button id="btn-toggle-drill" class="btn highlight active" title="Toggle 1-Player Obstacle Training Mode [G]">
+          🚩 Exit Slalom [G]
+        </button>
+        <button id="btn-reset-drill" class="btn" title="Reset player and ball to start of cone drill">
+          🔄 Reset to Start
+        </button>
+      </div>
+      <div class="metric-row preset-buttons" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-top: 4px;">
+        <button id="btn-course-slalom" class="btn active" title="8-Cone Straight Slalom Weave">Slalom</button>
+        <button id="btn-course-zigzag" class="btn" title="6-Cone Zigzag Plant-and-Cut Corridor">Zigzag</button>
+        <button id="btn-course-box" class="btn" title="5-Cone Agility Box Drill">Agility Box</button>
+      </div>
+    </div>
+
+    <!-- 1.4 FM24 Physical Attributes & Build Sliders -->
+    <div class="metrics-section" id="section-attributes-tuning">
+      <div class="section-title">🎛️ FM24 Physical Attributes & Build</div>
+
+      <!-- Quick Archetype Presets -->
+      <div class="metric-row preset-buttons" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-bottom: 4px;">
+        <button id="btn-arch-messi" class="btn active" title="Lionel Messi: 1.70m, 72kg, Supreme Agility & Balance">🐐 Messi</button>
+        <button id="btn-arch-haaland" class="btn" title="Erling Haaland: 1.95m, 88kg, Blistering Speed & Aerial Power">🤖 Haaland</button>
+        <button id="btn-arch-mbappe" class="btn" title="Kylian Mbappé: 1.78m, 75kg, 10m/s Pace & Acceleration">⚡ Mbappé</button>
+        <button id="btn-arch-modric" class="btn" title="Luka Modrić: 1.72m, 66kg, Elite Stamina & Agility">🪄 Modrić</button>
+        <button id="btn-arch-vandijk" class="btn" title="Virgil van Dijk: 1.93m, 92kg, Towering Strength & Reach">🧱 Van Dijk</button>
+        <button id="btn-arch-amateur" class="btn" title="Amateur: 1.78m, 80kg, Sluggish Physicals">👟 Amateur</button>
+      </div>
+
+      <!-- Height & Weight -->
+      <div class="metric-row slider-row">
+        <span style="min-width: 90px;">Height:</span>
+        <strong id="val-height" style="color: #93c5fd; min-width: 50px;">1.70 m</strong>
+        <input type="range" id="slider-height" min="1.60" max="2.05" step="0.01" value="1.70">
+      </div>
+      <div class="metric-row slider-row">
+        <span style="min-width: 90px;">Weight:</span>
+        <strong id="val-weight" style="color: #93c5fd; min-width: 50px;">72.0 kg</strong>
+        <input type="range" id="slider-weight" min="55" max="100" step="0.5" value="72.0">
+      </div>
+
+      <!-- FM24 1-20 Physical Attributes -->
+      <div class="metric-row slider-row">
+        <span style="min-width: 90px;">Pace:</span>
+        <strong id="val-pace" style="color: #facc15; min-width: 25px;">16</strong>
+        <input type="range" id="slider-pace" min="1" max="20" step="1" value="16">
+      </div>
+      <div class="metric-row slider-row">
+        <span style="min-width: 90px;">Acceleration:</span>
+        <strong id="val-accel" style="color: #facc15; min-width: 25px;">19</strong>
+        <input type="range" id="slider-accel" min="1" max="20" step="1" value="19">
+      </div>
+      <div class="metric-row slider-row">
+        <span style="min-width: 90px;">Agility:</span>
+        <strong id="val-agility" style="color: #facc15; min-width: 25px;">20</strong>
+        <input type="range" id="slider-agility" min="1" max="20" step="1" value="20">
+      </div>
+      <div class="metric-row slider-row">
+        <span style="min-width: 90px;">Balance:</span>
+        <strong id="val-balance" style="color: #facc15; min-width: 25px;">20</strong>
+        <input type="range" id="slider-balance" min="1" max="20" step="1" value="20">
+      </div>
+      <div class="metric-row slider-row">
+        <span style="min-width: 90px;">Jumping:</span>
+        <strong id="val-jumping" style="color: #facc15; min-width: 25px;">8</strong>
+        <input type="range" id="slider-jumping" min="1" max="20" step="1" value="8">
+      </div>
+      <div class="metric-row slider-row">
+        <span style="min-width: 90px;">Stamina:</span>
+        <strong id="val-stamina" style="color: #facc15; min-width: 25px;">16</strong>
+        <input type="range" id="slider-stamina" min="1" max="20" step="1" value="16">
+      </div>
+      <div class="metric-row slider-row">
+        <span style="min-width: 90px;">Strength:</span>
+        <strong id="val-strength" style="color: #facc15; min-width: 25px;">12</strong>
+        <input type="range" id="slider-strength" min="1" max="20" step="1" value="12">
+      </div>
+    </div>
+
+    <!-- 1.5 Camera Angles, Pitch Layout & Height Zoom -->
+    <div class="metrics-section" id="section-camera-controls">
+      <div class="section-title">🎥 Camera Angles & View Height</div>
+      <div class="metric-row">
+        <span>Orientation:</span>
+        <strong id="tel-cam-orient" style="color: #38bdf8;">Horizontal (East-West)</strong>
+      </div>
+      <div class="metric-row preset-buttons" style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 4px;">
+        <button id="btn-cam-orient-horiz" class="btn active" title="Side-on Broadcast View [H]">↔️ Horizontal [H]</button>
+        <button id="btn-cam-orient-vert" class="btn" title="Goal-to-Goal Top-to-Bottom View [Y]">↕️ Vertical (Goal-to-Goal) [Y]</button>
+      </div>
+
+      <div class="metric-row" style="margin-top: 6px;">
+        <span>Camera Height (Zoom):</span>
+        <strong id="tel-cam-height-val" style="color: #10b981;">Close (1.6x)</strong>
+      </div>
+      <div class="metric-row preset-buttons" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-top: 4px;">
+        <button id="btn-cam-zoom-broadcast" class="btn" title="Broadcast High View (1.0x)">Broadcast</button>
+        <button id="btn-cam-zoom-tele" class="btn" title="Tele Mid View (1.35x)">Tele</button>
+        <button id="btn-cam-zoom-close" class="btn active" title="Close Ground View (1.85x)">Close</button>
+      </div>
+      <div class="metric-row slider-row" style="margin-top: 4px;">
+        <span style="min-width: 90px;">Height Zoom:</span>
+        <strong id="val-cam-height" style="color: #10b981; min-width: 40px;">1.6x</strong>
+        <input type="range" id="slider-cam-height" min="0.6" max="2.8" step="0.1" value="1.6">
+      </div>
+    </div>
+
+    <!-- 2. Ball Dynamics -->
+    <div class="metrics-section">
+      <div class="section-title">⚽ Ball Dynamics (FIFA Size 5)</div>
+      <div class="metric-row">
+        <span>Ball Speed:</span>
+        <strong id="tel-b-speed">0.00 m/s (0.0 km/h)</strong>
+      </div>
+      <div class="metric-row">
+        <span>Elevation (Z):</span>
+        <strong id="tel-b-elev" style="color: #10b981;">0.00 m (Turf)</strong>
+      </div>
+      <div class="metric-row">
+        <span>Distance Rolled:</span>
+        <strong id="tel-b-dist">0.00 m</strong>
+      </div>
+    </div>
+
+    <!-- 3. Environment & Calibration -->
+    <div class="metrics-section">
+      <div class="section-title">🌱 Environment & Turf</div>
+      <div class="metric-row">
+        <span>Turf State:</span>
+        <strong id="tel-turf">DRY (24mm, μr = 0.110)</strong>
+      </div>
+      <div class="metric-row">
+        <span>Wind Vector:</span>
+        <strong id="tel-wind">2.5 m/s @ 23°</strong>
+      </div>
+      <div class="metric-row">
+        <span>Camera View:</span>
+        <strong id="tel-cam">Follow Cam</strong>
+      </div>
+      <div class="metric-row slider-row">
+        <span>Wind Speed:</span>
+        <input type="range" id="wind-slider" min="0" max="15" step="0.5" value="2.5">
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="card-actions">
+      <button id="btn-toggle-turf" class="btn" title="Toggle between Dry, Wet, and Long grass [T]">
+        🌱 Toggle Turf [T]
+      </button>
+      <button id="btn-toggle-cam" class="btn" title="Switch between Follow and Full Pitch Cam [V]">
+        🎥 Camera [V]
+      </button>
+      <button id="btn-reset-ball" class="btn highlight" title="Place ball back in front of player [R]">
+        ⚽ Reset Ball [R]
+      </button>
+    </div>
+  </aside>
+
+  <!-- Controls Cheat-Sheet Bottom Banner -->
+  <footer id="controls-bar">
+    <div class="control-pill loc-pill">🏃 <b>W A S D / W A C D</b>: Move (Up, Left, Down, Right)</div>
+    <div class="control-pill loc-pill"><b>Shift</b>: Sprint</div>
+    <div class="control-pill loc-pill"><b>Space / Alt</b>: Jockey / Walk</div>
+    <div class="control-pill loc-pill" style="border-color: #10b981; color: #10b981;">🚩 <b>G</b>: Toggle Obstacle Slalom Drill</div>
+    <div class="control-pill sys-pill">🎥 <b>Y</b>: Camera Angle (Vertical/Horizontal) | <b>+ / -</b>: Zoom | <b>V</b>: Full Pitch Cam</div>
+    <div class="control-pill sys-pill">🌱 <b>T</b>: Turf Condition | ⚽ <b>R</b>: Reset Ball</div>
+  </footer>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
