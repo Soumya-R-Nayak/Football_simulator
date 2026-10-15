@@ -163,6 +163,7 @@ export const SIM_CONFIG = {
     MAX_SUBSTEPS: 3,                // Multi-contact TOI iterations per 120Hz tick
     PENETRATION_BUFFER: 0.002,      // 2 mm separation buffer
     SUBSTEP_EPSILON: 1e-6,          // Numerical time epsilon
+    GROUND_PIN_REBOUND_FACTOR: 0.40, // Vertical rebound damping when ball is pinned against turf
   },
 
   // Boot Local Surface Zones (Slice 3b)

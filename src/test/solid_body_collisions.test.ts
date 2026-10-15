@@ -5,7 +5,7 @@ import { Vector3 } from '../math/Vector3';
 import { SIM_CONFIG } from '../sim/config';
 import { Intent } from '../sim/types';
 import { SweptCollisionResolver, ContactManifold } from '../sim/collision/SweptCollision';
-import { CapsuleShape, ContactBody } from '../sim/collision/ContactBody';
+import { CapsuleShape, ContactBody, extractPlayerContactBodies } from '../sim/collision/ContactBody';
 import { BallPhysics } from '../sim/physics/BallPhysics';
 
 const neutralIntent: Intent = {
@@ -185,7 +185,7 @@ describe('Slice 3a: Physical Solid Body Collisions & Relative Swept CCD', () => 
   });
 
   describe('Edge Case 5: Vertical Capsule Bounding (Lofted Pass Overhead Clearance)', () => {
-    it('allows a high aerial ball (z = 2.2m) to fly over the player without hitting an invisible collider', () => {
+    it('allows a high aerial ball (z = 2.4m) to fly over the player without hitting an invisible collider', () => {
       // Player at (4.0, 0)
       sim.reset(new Vector2(4.0, 0), 0);
 
@@ -440,46 +440,59 @@ describe('Slice 3a: Physical Solid Body Collisions & Relative Swept CCD', () => 
       const dt480 = 1 / 480;
 
       const runConvergenceSimulation = (stepDt: number) => {
-        const ball = new BallPhysics(new Vector3(0, 0, SIM_CONFIG.BALL.RADIUS));
-        ball.setState({
-          ...ball.getState(),
-          position: new Vector3(0, 0, SIM_CONFIG.BALL.RADIUS),
-          velocity: new Vector3(2.0, 0, 0), // Moves in +x at 2 m/s
-          spin: Vector3.zero(),
-          flightState: 'rolling',
-        });
+        const s = new SimulationCore();
+        s.reset(Vector2.zero(), 0);
 
-        // Body 1: Light obstacle at x = 0.134.
-        // Radius = 0.02, ball radius = 0.11. Gap = 0.134 - 0.13 = 0.004m.
-        // Ball at 2 m/s hits it at t = 0.004 / 2 = 0.002s (Substep 1).
-        const body1Radius = 0.02;
+        // Advance player into steady sprint swing phase (tick 84)
+        for (let t = 0; t < 84; t++) {
+          s.step({ moveDir: new Vector2(1, 0), gait: 'sprint' });
+        }
+
+        const prevState = s.getPreviousState();
+        const currState = s.getCurrentState();
+
+        const bodiesStart = extractPlayerContactBodies(prevState, currState, dt120, 0);
+        const swingBootStart = bodiesStart.find((b) => b.id.includes('boot') && !b.loaded)!;
+        const swingBootId = swingBootStart.id;
+
+        const toe0 = (swingBootStart.shape as CapsuleShape).p2;
+        const xToe0 = toe0.x;
+        const yToe0 = toe0.y;
+
+        const x0 = xToe0 + 0.2306;
+        const x1 = x0 - 0.124; // Body 1 position
+
+        // Body 1: Light obstacle to trigger Substep 1 at t = 0.002s
+        const obstaclePos = new Vector3(x1, yToe0, SIM_CONFIG.BALL.RADIUS);
         const body1: ContactBody = {
-          id: 'torso',
-          shape: {
-            type: 'sphere',
-            center: new Vector3(0.134, 0, SIM_CONFIG.BALL.RADIUS),
-            radius: body1Radius,
-          },
-          prevPos: new Vector3(0.134, 0, SIM_CONFIG.BALL.RADIUS),
-          currPos: new Vector3(0.134, 0, SIM_CONFIG.BALL.RADIUS),
+          id: 'light_obstacle' as any,
+          shape: { type: 'sphere', center: obstaclePos, radius: 0.01 },
+          prevPos: obstaclePos,
+          currPos: obstaclePos,
           velocity: Vector3.zero(),
-          effMass: 0.01, // Tiny mass: triggers substep 1 without deflecting ball significantly
+          effMass: 0.01,
           restitution: 0.1,
           friction: 0.0,
           loaded: false,
           active: false,
         };
 
-        // Body 2: Swing boot moving in +x at 20 m/s.
-        // Starts at x = -0.241. Hits ball rear at t = 0.0045s in Substep 2!
-        const bootRadius = SIM_CONFIG.COLLISION.BOOT_RADIUS; // 0.05m
-        const bootSpeedX = 20.0;
-        const bootInitialX = -0.241;
+        // Ball setup: incoming at -2 m/s so relative speed with ~13.7 m/s foot is ~15.7 m/s (>= 15 m/s)
+        const ballStartPos = new Vector3(x0, yToe0, SIM_CONFIG.BALL.RADIUS);
+        const ball = new BallPhysics(ballStartPos);
+        ball.setState({
+          ...ball.getState(),
+          position: ballStartPos,
+          velocity: new Vector3(-2.0, 0, 0),
+          spin: Vector3.zero(),
+          flightState: 'rolling',
+        });
 
-        let simTime = 0;
-        const totalDuration = dt120;
-        const totalSteps = Math.round(totalDuration / stepDt);
+        let totalSimTime = 0;
+        const totalSteps = Math.round(dt120 / stepDt);
         let postFootVelocity: Vector3 | null = null;
+        let relativeSpeedAtContact = 0;
+        let hasHitObstacle = false;
 
         for (let step = 0; step < totalSteps; step++) {
           let tickElapsed = 0;
@@ -488,33 +501,14 @@ describe('Slice 3a: Physical Solid Body Collisions & Relative Swept CCD', () => 
             const remDt = stepDt - tickElapsed;
             if (remDt <= 1e-7) break;
 
-            const tCurrent = simTime + tickElapsed;
+            const tCurrent = totalSimTime + tickElapsed;
+            const tau = Math.min(1.0, tCurrent / dt120);
 
-            // Update boot capsule for current sub-interval
-            const bootX = bootInitialX + bootSpeedX * tCurrent;
-            const bootShape: CapsuleShape = {
-              type: 'capsule',
-              p1: new Vector3(bootX, -0.05, SIM_CONFIG.BALL.RADIUS),
-              p2: new Vector3(bootX, 0.05, SIM_CONFIG.BALL.RADIUS),
-              radius: bootRadius,
-              v1: new Vector3(bootSpeedX, 0, 0),
-              v2: new Vector3(bootSpeedX, 0, 0),
-            };
-            const bootBody: ContactBody = {
-              id: 'right_boot',
-              shape: bootShape,
-              prevPos: new Vector3(bootX - bootSpeedX * remDt, 0, SIM_CONFIG.BALL.RADIUS),
-              currPos: new Vector3(bootX, 0, SIM_CONFIG.BALL.RADIUS),
-              velocity: new Vector3(bootSpeedX, 0, 0),
-              effMass: 4.5,
-              restitution: 0.55,
-              friction: 0.40,
-              loaded: false,
-              active: true,
-            };
+            // Real StrideEngine bodies at current sub-interval time
+            const currentBodies = extractPlayerContactBodies(prevState, currState, dt120, tau);
+            const swingBoot = currentBodies.find((b) => b.id === swingBootId)!;
 
-            // Body 1 only exists before t = 0.003s
-            const bodies = tCurrent < 0.003 ? [body1, bootBody] : [bootBody];
+            const bodies = !hasHitObstacle ? [body1, swingBoot] : [swingBoot];
             let earliestHit: ContactManifold | null = null;
             const bState = ball.getState();
 
@@ -537,14 +531,44 @@ describe('Slice 3a: Physical Solid Body Collisions & Relative Swept CCD', () => 
               break;
             }
 
+            if (earliestHit.body.id === ('light_obstacle' as any)) {
+              hasHitObstacle = true;
+            }
+
             const subDuration = earliestHit.toi * remDt;
             if (subDuration > 1e-7) {
               ball.step(subDuration, tCurrent);
               tickElapsed += subDuration;
             }
 
+            // 2 iterations of re-posing at tauImpact
+            const tauImpact = Math.min(1.0, (totalSimTime + tickElapsed) / dt120);
+            let bodyAtHit = earliestHit.body;
+            let contactManifold = earliestHit;
+            for (let iter = 0; iter < 2; iter++) {
+              const bodiesAtImpact = extractPlayerContactBodies(prevState, currState, dt120, tauImpact);
+              bodyAtHit = bodiesAtImpact.find((b) => b.id === earliestHit!.body.id) ?? bodyAtHit;
+              const refined = SweptCollisionResolver.refineContactGeometry(
+                ball.getState().position,
+                ball.radius,
+                bodyAtHit
+              );
+              contactManifold = {
+                body: bodyAtHit,
+                toi: earliestHit.toi,
+                contactPoint: refined.contactPoint,
+                normal: refined.normal,
+                penetration: refined.penetration,
+                sParam: refined.sParam,
+              };
+            }
+
+            if (contactManifold.body.id === swingBootId) {
+              relativeSpeedAtContact = ball.getState().velocity.sub(contactManifold.body.velocity).length();
+            }
+
             const impulse = SweptCollisionResolver.resolveImpulse(
-              earliestHit,
+              contactManifold,
               ball.getState().velocity,
               ball.getState().spin,
               ball.mass,
@@ -558,27 +582,31 @@ describe('Slice 3a: Physical Solid Body Collisions & Relative Swept CCD', () => 
               position: ball.getState().position.add(impulse.posCorrection),
             });
 
-            if (earliestHit.body.id === 'right_boot') {
+            if (contactManifold.body.id === swingBootId) {
               postFootVelocity = ball.getState().velocity.clone();
             }
           }
 
-          simTime += stepDt;
+          totalSimTime += stepDt;
         }
 
-        return postFootVelocity ?? ball.getState().velocity;
+        return {
+          vel: postFootVelocity ?? ball.getState().velocity,
+          relSpeed: relativeSpeedAtContact,
+        };
       };
 
-      const vel120 = runConvergenceSimulation(dt120);
-      const vel480 = runConvergenceSimulation(dt480);
+      const res120 = runConvergenceSimulation(dt120);
+      const res480 = runConvergenceSimulation(dt480);
 
-      const diff = vel120.sub(vel480).length();
-      const refSpeed = vel480.length();
+      const diff = res120.vel.sub(res480.vel).length();
+      const refSpeed = res480.vel.length();
       const relativeError = diff / refSpeed;
 
       // Convergence tolerance: <= 2% (0.02)
       expect(relativeError).toBeLessThanOrEqual(0.02);
-      expect(vel120.x).toBeGreaterThan(15.0);
+      expect(res120.relSpeed).toBeGreaterThanOrEqual(15.0);
+      expect(res120.vel.x).toBeGreaterThan(15.0);
     });
   });
 });

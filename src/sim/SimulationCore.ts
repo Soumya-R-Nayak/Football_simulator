@@ -242,24 +242,42 @@ export class SimulationCore {
         tickElapsed += subDuration;
       }
 
-      // Exact normalized fraction of tick at impact: t = tickElapsed + toi * remDt
+      // Exact normalized fraction of tick at impact: t = tickElapsed / dt
       const tauImpact = Math.min(1.0, tickElapsed / dt);
+      const ballAtImpact = this.ball.getState();
 
-      // Re-evaluate body state at exact tauImpact for impulse resolution
-      const bodiesAtImpact = extractPlayerContactBodies(
-        this.previousState,
-        this.currentState,
-        dt,
-        tauImpact,
-        overrideLeft,
-        overrideRight
-      );
-      const bodyAtHit = bodiesAtImpact.find((b) => b.id === earliestHit!.body.id) ?? earliestHit.body;
+      let bodyAtHit = earliestHit.body;
+      let contactManifold: ContactManifold = earliestHit;
 
-      const manifoldAtHit: ContactManifold = {
-        ...earliestHit,
-        body: bodyAtHit,
-      };
+      // 2 iterations: re-pose bodies at tauImpact and recompute contact point, normal, penetration, and sParam
+      for (let iter = 0; iter < 2; iter++) {
+        const bodiesAtImpact = extractPlayerContactBodies(
+          this.previousState,
+          this.currentState,
+          dt,
+          tauImpact,
+          overrideLeft,
+          overrideRight
+        );
+        bodyAtHit = bodiesAtImpact.find((b) => b.id === earliestHit!.body.id) ?? bodyAtHit;
+
+        const refined = SweptCollisionResolver.refineContactGeometry(
+          ballAtImpact.position,
+          this.ball.radius,
+          bodyAtHit
+        );
+
+        contactManifold = {
+          body: bodyAtHit,
+          toi: earliestHit.toi,
+          contactPoint: refined.contactPoint,
+          normal: refined.normal,
+          penetration: refined.penetration,
+          sParam: refined.sParam,
+        };
+      }
+
+      const manifoldAtHit = contactManifold;
 
       // Resolve contact impulse & Coulomb friction
       const ballAtHit = this.ball.getState();
@@ -297,7 +315,11 @@ export class SimulationCore {
           this.ball.setState({
             ...postImpulse,
             position: correctedPos,
-            velocity: new Vector3(postImpulse.velocity.x, postImpulse.velocity.y, Math.max(0, -postImpulse.velocity.z * 0.4)),
+            velocity: new Vector3(
+              postImpulse.velocity.x,
+              postImpulse.velocity.y,
+              Math.max(0, -postImpulse.velocity.z * SIM_CONFIG.COLLISION.GROUND_PIN_REBOUND_FACTOR)
+            ),
             spin: postImpulse.spin.add(impulseRes.deltaOmega),
           });
         } else {

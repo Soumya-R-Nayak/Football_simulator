@@ -54,6 +54,7 @@ export class KickSwingController {
   private ankleStiffness: number = 0.9;
   private currentFootPos: Vector3 = Vector3.zero();
   private currentFootVel: Vector3 = Vector3.zero();
+  private targetBallPos: Vector3 | null = null;
 
   // Last contact telemetry
   private lastContactMarker: {
@@ -113,21 +114,30 @@ export class KickSwingController {
       this.activeFoot = player.attributes.footedness.dominantFoot === 'left' ? 'left' : 'right';
     }
 
-    // Reach check: uses reachable boot contact point (IK limit + ball radius) from kicking hip joint
+    // Reach check: computed from real geometry (hip height, leg length, ankle z, boot offsets, ball radius)
     const latSign = this.activeFoot === 'left' ? -1 : 1;
     const hipOffset = SIM_CONFIG.COLLISION.HIP_OFFSET_Y;
-    const hipX = player.position.x + latX * (latSign * hipOffset);
-    const hipY = player.position.y + latY * (latSign * hipOffset);
-    const distFromHip2D = Math.hypot(ball.position.x - hipX, ball.position.y - hipY);
-    const maxBootReach =
-      SIM_CONFIG.COLLISION.THIGH_LEN +
-      SIM_CONFIG.COLLISION.SHIN_LEN +
+    const hipPos = new Vector3(
+      player.position.x + latX * (latSign * hipOffset),
+      player.position.y + latY * (latSign * hipOffset),
+      SIM_CONFIG.COLLISION.HIP_HEIGHT
+    );
+
+    // Leg reach from hip to ankle in 3D
+    const maxLegReach = SIM_CONFIG.COLLISION.THIGH_LEN + SIM_CONFIG.COLLISION.SHIN_LEN;
+    const maxBootReach3D =
+      maxLegReach +
       SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_TOE +
       SIM_CONFIG.COLLISION.BOOT_RADIUS +
-      SIM_CONFIG.BALL.RADIUS;
+      SIM_CONFIG.BALL.RADIUS +
+      0.005; // Tight compliance margin for pelvic tilt
 
-    if (distFromHip2D > maxBootReach) {
-      return { success: false, reason: `Ball out of reach (${distFromHip2D.toFixed(2)}m > ${maxBootReach.toFixed(2)}m)` };
+    const dz = Math.abs(hipPos.z - ball.position.z);
+    const maxReach2D = Math.sqrt(Math.max(0, maxBootReach3D * maxBootReach3D - dz * dz));
+    const distFromHip2D = Math.hypot(ball.position.x - hipPos.x, ball.position.y - hipPos.y);
+
+    if (distFromHip2D > maxReach2D) {
+      return { success: false, reason: `Ball out of reach (${distFromHip2D.toFixed(2)}m > ${maxReach2D.toFixed(2)}m)` };
     }
 
     this.currentIntent = intent;
@@ -202,12 +212,13 @@ export class KickSwingController {
     this.backswingPos = this.strikePos.sub(this.strikeDir.scale(0.32));
 
     // Follow-through position: extended forward along strike line
-    this.followThroughPos = this.strikePos.add(this.strikeDir.scale(0.22));
+    this.followThroughPos = this.strikePos.add(this.strikeDir.scale(0.38));
 
     this.state = 'backswing';
     this.stateTimer = 0;
     this.currentFootPos = this.startFootPos;
     this.currentFootVel = Vector3.zero();
+    this.targetBallPos = ball.position.clone();
 
     return { success: true };
   }
@@ -220,12 +231,57 @@ export class KickSwingController {
 
     this.stateTimer += dt;
 
+    // Real geometry IK ankle constraint:
+    // Distance from hip to ankle cannot exceed THIGH_LEN + SHIN_LEN
+    const constrainToLegIK = (pos: Vector3): Vector3 => {
+      const latSign = this.activeFoot === 'left' ? -1 : 1;
+      const latX = -Math.sin(player.facing);
+      const latY = Math.cos(player.facing);
+      const hipOffset = SIM_CONFIG.COLLISION.HIP_OFFSET_Y;
+      const hipPos = new Vector3(
+        player.position.x + latX * (latSign * hipOffset),
+        player.position.y + latY * (latSign * hipOffset),
+        SIM_CONFIG.COLLISION.HIP_HEIGHT
+      );
+
+      const maxLegReach = SIM_CONFIG.COLLISION.THIGH_LEN + SIM_CONFIG.COLLISION.SHIN_LEN;
+      const bootDir = new Vector3(
+        Math.cos(this.bootYaw) * Math.cos(this.bootPitch),
+        Math.sin(this.bootYaw) * Math.cos(this.bootPitch),
+        Math.sin(this.bootPitch)
+      ).normalize();
+
+      const ankleToMidOffset = (SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_TOE - SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_HEEL) * 0.5;
+      const anklePos = pos.sub(bootDir.scale(ankleToMidOffset));
+      const ankleFromHip = anklePos.sub(hipPos);
+      const ankleDist = ankleFromHip.length();
+
+      if (ankleDist > maxLegReach) {
+        const clampedAnkle = hipPos.add(ankleFromHip.scale(maxLegReach / ankleDist));
+        // Natural plantarflexion: point boot directly toward ball when stretching to reach
+        const toTarget = this.targetBallPos ? this.targetBallPos.sub(clampedAnkle) : this.strikePos.sub(clampedAnkle);
+        const toTargetDist = toTarget.length();
+        if (toTargetDist > 1e-3) {
+          const targetPitch = Math.asin(Math.max(-0.85, Math.min(0.85, toTarget.z / toTargetDist)));
+          this.bootPitch = targetPitch;
+        }
+        const adaptedBootDir = new Vector3(
+          Math.cos(this.bootYaw) * Math.cos(this.bootPitch),
+          Math.sin(this.bootYaw) * Math.cos(this.bootPitch),
+          Math.sin(this.bootPitch)
+        ).normalize();
+        return clampedAnkle.add(adaptedBootDir.scale(ankleToMidOffset));
+      }
+      return pos;
+    };
+
     if (this.state === 'backswing') {
       const duration = SIM_CONFIG.KICK_SWING.BACKSWING_TIME;
       const u = Math.min(1.0, this.stateTimer / duration);
       // Smooth minimum-jerk blend from startFootPos to backswingPos
       const s = u * u * (3 - 2 * u);
-      const nextPos = this.startFootPos.lerp(this.backswingPos, s);
+      let nextPos = this.startFootPos.lerp(this.backswingPos, s);
+      nextPos = constrainToLegIK(nextPos);
       this.currentFootVel = nextPos.sub(this.currentFootPos).scale(1 / Math.max(1e-4, dt));
       this.currentFootPos = nextPos;
 
@@ -238,7 +294,8 @@ export class KickSwingController {
       const u = Math.min(1.0, this.stateTimer / duration);
       // Quadratic acceleration toward ball contact point
       const s = u * u;
-      const nextPos = this.backswingPos.lerp(this.strikePos, s);
+      let nextPos = this.backswingPos.lerp(this.strikePos, s);
+      nextPos = constrainToLegIK(nextPos);
       // Arrives with targetFootSpeed in direction of strike
       const velMag = Math.min(this.targetFootSpeed, u * this.targetFootSpeed * 1.5);
       this.currentFootVel = this.strikeDir.scale(velMag);
@@ -253,7 +310,8 @@ export class KickSwingController {
       const u = Math.min(1.0, this.stateTimer / duration);
       // Decelerate past the strike point
       const s = Math.sin(u * Math.PI * 0.5);
-      const nextPos = this.strikePos.lerp(this.followThroughPos, s);
+      let nextPos = this.strikePos.lerp(this.followThroughPos, s);
+      nextPos = constrainToLegIK(nextPos);
       const remainingSpeed = this.targetFootSpeed * (1 - u);
       this.currentFootVel = this.strikeDir.scale(remainingSpeed);
       this.currentFootPos = nextPos;
@@ -321,5 +379,6 @@ export class KickSwingController {
     this.stateTimer = 0;
     this.currentIntent = null;
     this.lastContactMarker = null;
+    this.targetBallPos = null;
   }
 }

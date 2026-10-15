@@ -36,17 +36,19 @@ interface RawJointPositions {
 }
 
 /**
- * Evaluates the analytic 2-bone IK leg chain and foot position at normalized tick fraction tFrac.
- * Does not depend on stored previous-tick positions.
+ * Evaluates the 2-bone IK leg chain and foot position at normalized tick fraction tFrac in [0, 1].
+ * Interpolates foot position between prevState and currState stride foot positions (plus parabolic vertical z-arc).
  */
 function evaluateRawPoseAt(
-  player: PlayerState,
+  prevState: PlayerState,
+  currState: PlayerState,
   tFrac: number,
   dt: number
 ): { left: RawJointPositions; right: RawJointPositions } {
-  // Continuous COM position and facing at tFrac
-  const playerPos2D = player.position.add(player.velocity.scale(tFrac * dt));
-  const facing = player.facing + player.angularVelocity * (tFrac * dt);
+  // Continuous COM position and facing interpolated between prevState and currState
+  const clampedT = Math.max(0, Math.min(1.0, tFrac));
+  const playerPos2D = prevState.position.scale(1 - clampedT).add(currState.position.scale(clampedT));
+  const facing = prevState.facing + (currState.facing - prevState.facing) * clampedT;
 
   const hipHeight = SIM_CONFIG.COLLISION.HIP_HEIGHT;
   const hipOffsetY = SIM_CONFIG.COLLISION.HIP_OFFSET_Y;
@@ -62,14 +64,16 @@ function evaluateRawPoseAt(
   let leftLoaded = false;
   let rightLoaded = false;
 
-  if (player.stride.isDoubleSupport) {
+  const activeStride = currState.stride;
+
+  if (activeStride.isDoubleSupport) {
     leftLoaded = true;
     rightLoaded = true;
-  } else if (player.stride.phase === 'flight') {
+  } else if (activeStride.phase === 'flight') {
     leftLoaded = false;
     rightLoaded = false;
   } else {
-    if (player.stride.currentFoot === 'left') {
+    if (activeStride.currentFoot === 'left') {
       leftLoaded = true;
       rightLoaded = false;
     } else {
@@ -78,39 +82,40 @@ function evaluateRawPoseAt(
     }
   }
 
-  // Stride progression at tFrac
-  // Cadence in steps/sec: if moving, phase progress advances continuously
-  const speed = player.velocity.length();
-  const cadence = player.stride.cadence > 0 ? player.stride.cadence : Math.max(1.8, speed * 0.45);
-  const progressStep = speed > 0.1 ? (cadence * tFrac * dt) : 0;
-  const currentProgress = Math.min(1.0, Math.max(0.0, player.stride.phaseProgress + progressStep));
+  // Phase progress across the tick
+  let p = (1 - clampedT) * prevState.stride.phaseProgress + clampedT * currState.stride.phaseProgress;
+  if (currState.stride.phaseProgress < prevState.stride.phaseProgress) {
+    p = clampedT;
+  }
 
   // Helper for single leg IK
   const solveLeg = (isLeft: boolean, loaded: boolean): RawJointPositions => {
     const latSign = isLeft ? -1 : 1;
     const hipPos = new Vector3(playerPos2D.x, playerPos2D.y, hipHeight).add(latVec.scale(latSign * hipOffsetY));
 
-    // Base 2D foot position
-    const baseFootPos2D = isLeft ? player.stride.leftFootPos : player.stride.rightFootPos;
-    let footPos2D = baseFootPos2D;
+    // Stride engine 2D foot position interpolated between prevState and currState
+    const prevFootPos2D = isLeft ? prevState.stride.leftFootPos : prevState.stride.rightFootPos;
+    const currFootPos2D = isLeft ? currState.stride.leftFootPos : currState.stride.rightFootPos;
+
+    let footPos2D: Vector2;
+    if (prevState === currState) {
+      // Frozen single state fallback
+      const speed = currState.velocity.length();
+      const swingAdvance = fwdVec.scale(speed * clampedT * dt);
+      footPos2D = loaded ? currFootPos2D : currFootPos2D.add(new Vector2(swingAdvance.x, swingAdvance.y));
+    } else {
+      footPos2D = prevFootPos2D.scale(1 - clampedT).add(currFootPos2D.scale(clampedT));
+    }
 
     let footZ = footStanceZ;
     let bootPitch = 0;
 
     if (loaded) {
-      // Planted stance foot
       footZ = footStanceZ;
       bootPitch = 0;
     } else {
-      // Swing foot: parabolic vertical arc + forward swing progression
-      const p = currentProgress;
+      // Swing foot: parabolic vertical arc + boot pitch
       footZ = footStanceZ + footSwingMaxZ * 4 * p * (1 - p);
-
-      // Swing forward translation during swing phase
-      const swingAdvance = fwdVec.scale(speed * tFrac * dt);
-      footPos2D = baseFootPos2D.add(new Vector2(swingAdvance.x, swingAdvance.y));
-
-      // Boot pitch: toe down at mid-swing apex (p ≈ 0.5), toe up at heel strike (p → 1.0)
       bootPitch = -0.38 * Math.sin(p * Math.PI) + 0.24 * Math.pow(Math.max(0, (p - 0.6) / 0.4), 2);
     }
 
@@ -125,17 +130,11 @@ function evaluateRawPoseAt(
     let dClamped = dLen;
     if (dLen > reachMax) {
       dClamped = reachMax;
-      if (!loaded) {
-        anklePos = hipPos.add(dVec.scale(reachMax / dLen));
-      }
     } else if (dLen < reachMin) {
       dClamped = reachMin;
-      if (!loaded) {
-        anklePos = hipPos.add(dVec.scale(reachMin / Math.max(1e-4, dLen)));
-      }
     }
 
-    const legAxis = anklePos.sub(hipPos).scale(1 / dClamped);
+    const legAxis = dVec.scale(1 / Math.max(1e-4, dLen));
 
     // Knee forward plane projection
     let kneePlaneDir = fwdVec.sub(legAxis.scale(fwdVec.dot(legAxis)));
@@ -153,18 +152,20 @@ function evaluateRawPoseAt(
 
     // Boot Yaw: follows shank direction unless shank is purely vertical, then follows facing
     const shankVec = anklePos.sub(kneePos);
-    const shankHoriz = Math.hypot(shankVec.x, shankVec.y);
-    const bootYaw = loaded || shankHoriz < 0.05 ? facing : Math.atan2(shankVec.y, shankVec.x);
+    const bootYaw = facing;
 
     // Boot orientation vector
     const bootDir = new Vector3(
       Math.cos(bootYaw) * Math.cos(bootPitch),
       Math.sin(bootYaw) * Math.cos(bootPitch),
       Math.sin(bootPitch)
-    );
+    ).normalize();
 
-    const heelPos = anklePos.sub(bootDir.scale(SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_HEEL));
-    const toePos = anklePos.add(bootDir.scale(SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_TOE));
+    const bootAnkleOffsetHeel = SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_HEEL;
+    const bootAnkleOffsetToe = SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_TOE;
+
+    const heelPos = anklePos.sub(bootDir.scale(bootAnkleOffsetHeel));
+    const toePos = anklePos.add(bootDir.scale(bootAnkleOffsetToe));
 
     return {
       hip: hipPos,
@@ -189,17 +190,46 @@ function evaluateRawPoseAt(
  * Joint velocities are evaluated via central difference of the analytic pose function (eps = 1e-4 s).
  */
 export function poseAt(
+  prevState: PlayerState,
+  currState: PlayerState,
+  tFrac?: number,
+  dt?: number
+): PlayerLegPoses;
+export function poseAt(
   player: PlayerState,
-  tFrac: number = 1.0,
-  dt: number = SIM_CONFIG.LOOP.FIXED_DT
+  tFrac?: number,
+  dt?: number
+): PlayerLegPoses;
+export function poseAt(
+  arg1: PlayerState,
+  arg2?: PlayerState | number,
+  arg3?: number,
+  arg4?: number
 ): PlayerLegPoses {
+  let prevState: PlayerState;
+  let currState: PlayerState;
+  let tFrac: number;
+  let dt: number;
+
+  if (typeof arg2 === 'object' && arg2 !== null) {
+    prevState = arg1;
+    currState = arg2;
+    tFrac = arg3 ?? 1.0;
+    dt = arg4 ?? SIM_CONFIG.LOOP.FIXED_DT;
+  } else {
+    prevState = arg1;
+    currState = arg1;
+    tFrac = (typeof arg2 === 'number' ? arg2 : 1.0);
+    dt = arg3 ?? SIM_CONFIG.LOOP.FIXED_DT;
+  }
+
   const safeDt = Math.max(1e-4, dt);
   const epsSec = 1e-4; // 100 microseconds for exact central difference
   const epsFrac = epsSec / safeDt;
 
-  const current = evaluateRawPoseAt(player, tFrac, safeDt);
-  const forward = evaluateRawPoseAt(player, tFrac + epsFrac, safeDt);
-  const backward = evaluateRawPoseAt(player, tFrac - epsFrac, safeDt);
+  const current = evaluateRawPoseAt(prevState, currState, tFrac, safeDt);
+  const forward = evaluateRawPoseAt(prevState, currState, tFrac + epsFrac, safeDt);
+  const backward = evaluateRawPoseAt(prevState, currState, tFrac - epsFrac, safeDt);
 
   const denom = 2 * epsSec;
 
@@ -218,7 +248,7 @@ export function poseAt(
       bootYaw: current.left.bootYaw,
       bootPitch: current.left.bootPitch,
       loaded: current.left.loaded,
-      hipVel: current.left.loaded ? Vector3.zero() : forward.left.hip.sub(backward.left.hip).scale(1 / denom),
+      hipVel: forward.left.hip.sub(backward.left.hip).scale(1 / denom),
       kneeVel: diffVel(forward.left.knee, backward.left.knee, current.left.loaded),
       ankleVel: diffVel(forward.left.ankle, backward.left.ankle, current.left.loaded),
       heelVel: diffVel(forward.left.heel, backward.left.heel, current.left.loaded),
@@ -233,7 +263,7 @@ export function poseAt(
       bootYaw: current.right.bootYaw,
       bootPitch: current.right.bootPitch,
       loaded: current.right.loaded,
-      hipVel: current.right.loaded ? Vector3.zero() : forward.right.hip.sub(backward.right.hip).scale(1 / denom),
+      hipVel: forward.right.hip.sub(backward.right.hip).scale(1 / denom),
       kneeVel: diffVel(forward.right.knee, backward.right.knee, current.right.loaded),
       ankleVel: diffVel(forward.right.ankle, backward.right.ankle, current.right.loaded),
       heelVel: diffVel(forward.right.heel, backward.right.heel, current.right.loaded),

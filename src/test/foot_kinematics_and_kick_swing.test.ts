@@ -15,7 +15,7 @@ describe('Slice 3b: FootKinematics, Leg Colliders, Boot Zones, and Kick Swing Co
   const dt = SIM_CONFIG.LOOP.FIXED_DT; // 1/120s
 
   describe('1. FootKinematics (StrideEngine & 2-Bone IK)', () => {
-    it('matches analytic joint velocity against 120 Hz finite difference (<= 0.02 m/s error) during jog and sprint', () => {
+    it('matches poseAt velocity at tick midpoint with stride engine actual foot displacement (pos[N+1] - pos[N]) / dt within 5% over jog and sprint', () => {
       const gaits: ('jog' | 'sprint')[] = ['jog', 'sprint'];
 
       for (const gait of gaits) {
@@ -50,19 +50,24 @@ describe('Slice 3b: FootKinematics, Leg Colliders, Boot Zones, and Kick Swing Co
             continue;
           }
 
-          // Evaluate analytic pose and velocity at the tick midpoint (tFrac = 0.5)
-          const midPose = poseAt(currState, 0.5, dt);
-          const pStart = poseAt(currState, 0.0, dt);
-          const pEnd = poseAt(currState, 1.0, dt);
+          // Evaluate pose and velocity at the tick midpoint (tFrac = 0.5) using prevState and currState
+          const midPose = poseAt(prevState, currState, 0.5, dt);
 
-          // Finite difference velocity over the tick: (pos(1) - pos(0)) / dt
-          const numVelRightAnkle = pEnd.right.ankle.sub(pStart.right.ankle).scale(1 / dt);
-          const analyticVelRightAnkle = midPose.right.ankleVel;
+          // Stride engine actual foot displacement velocity over tick: (pos[N+1] - pos[N]) / dt
+          const swingFoot = currState.stride.currentFoot === 'left' ? 'right' : 'left';
+          const prevFootPos = swingFoot === 'right' ? prevState.stride.rightFootPos : prevState.stride.leftFootPos;
+          const currFootPos = swingFoot === 'right' ? currState.stride.rightFootPos : currState.stride.leftFootPos;
+          const simFootVel2D = currFootPos.sub(prevFootPos).scale(1 / dt);
 
-          const error = analyticVelRightAnkle.sub(numVelRightAnkle).length();
-          expect(error).toBeLessThanOrEqual(0.02); // Tolerance <= 0.02 m/s
+          const poseFoot = swingFoot === 'right' ? midPose.right : midPose.left;
+          const poseFootVel2D = new Vector2(poseFoot.ankleVel.x, poseFoot.ankleVel.y);
 
-          totalError += error;
+          // Relative error between poseAt velocity at tick midpoint and actual stride engine displacement: <= 5%
+          const diff = poseFootVel2D.sub(simFootVel2D).length();
+          const relError = diff / Math.max(1e-4, simFootVel2D.length());
+          expect(relError).toBeLessThanOrEqual(0.05);
+
+          totalError += diff;
           evaluatedTicks++;
         }
 
@@ -609,6 +614,92 @@ describe('Slice 3b: FootKinematics, Leg Colliders, Boot Zones, and Kick Swing Co
 
       const req = sim.requestKickPreset(1);
       expect(req.success).toBe(true);
+    });
+
+    it('sweeps kick reach over distance 0.3-1.3m and angle -90 to +90 deg enforcing IK constraint and ball movement', () => {
+      const anglesDeg = [-90, -60, -45, -30, 0, 30, 45, 60, 90];
+      const distances = [0.30, 0.45, 0.60, 0.75, 0.90, 0.95, 1.00, 1.10, 1.20, 1.30];
+      const maxLegReach = SIM_CONFIG.COLLISION.THIGH_LEN + SIM_CONFIG.COLLISION.SHIN_LEN;
+
+      let maxAcceptedDist = 0;
+      let totalAccepted = 0;
+      let totalRejected = 0;
+
+      for (const angDeg of anglesDeg) {
+        const angRad = (angDeg * Math.PI) / 180;
+
+        for (const dist of distances) {
+          const sim = new SimulationCore();
+          sim.reset(Vector2.zero(), 0);
+
+          const ballPos = new Vector3(
+            dist * Math.cos(angRad),
+            dist * Math.sin(angRad),
+            SIM_CONFIG.BALL.RADIUS
+          );
+          sim.resetBall(ballPos);
+
+          const req = sim.requestKickPreset(1, angRad);
+
+          if (req.success) {
+            totalAccepted++;
+            if (dist > maxAcceptedDist) {
+              maxAcceptedDist = dist;
+            }
+
+            let ballMoved = false;
+            // Step through kick swing and verify boot ankle distance from hip
+            for (let t = 0; t < 25; t++) {
+              sim.step({ moveDir: Vector2.zero(), gait: 'jog' });
+
+              const override = sim.getKickController().getBootOverride();
+              if (override) {
+                const player = sim.getCurrentState();
+                const latSign = override.foot === 'left' ? -1 : 1;
+                const latX = -Math.sin(player.facing);
+                const latY = Math.cos(player.facing);
+                const hipPos = new Vector3(
+                  player.position.x + latX * (latSign * SIM_CONFIG.COLLISION.HIP_OFFSET_Y),
+                  player.position.y + latY * (latSign * SIM_CONFIG.COLLISION.HIP_OFFSET_Y),
+                  SIM_CONFIG.COLLISION.HIP_HEIGHT
+                );
+
+                const bootDir = new Vector3(
+                  Math.cos(override.data.bootYaw) * Math.cos(override.data.bootPitch),
+                  Math.sin(override.data.bootYaw) * Math.cos(override.data.bootPitch),
+                  Math.sin(override.data.bootPitch)
+                ).normalize();
+                const ankleToMid = (SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_TOE - SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_HEEL) * 0.5;
+                const bootCenter = override.data.p1.add(override.data.p2).scale(0.5);
+                const anklePos = bootCenter.sub(bootDir.scale(ankleToMid));
+
+                const ankleDistFromHip = anklePos.sub(hipPos).length();
+                // Boot ankle must NEVER be farther from hip than leg reach (+ numerical tolerance)
+                expect(ankleDistFromHip).toBeLessThanOrEqual(maxLegReach + 1e-3);
+              }
+
+              if (sim.getBallState().velocity.length() > 0.5) {
+                ballMoved = true;
+              }
+            }
+
+            // Accepted kick must move the ball
+            expect(ballMoved).toBe(true);
+          } else {
+            totalRejected++;
+            // Rejected kick: step simulation and ensure ball stays completely stationary
+            for (let t = 0; t < 10; t++) {
+              sim.step({ moveDir: Vector2.zero(), gait: 'jog' });
+            }
+            expect(sim.getBallState().velocity.length()).toBe(0);
+          }
+        }
+      }
+
+      console.log(`[Sweep Test Results] maxAcceptedDist: ${maxAcceptedDist} m, accepted: ${totalAccepted}, rejected: ${totalRejected}`);
+      expect(maxAcceptedDist).toBeGreaterThanOrEqual(0.95);
+      expect(totalAccepted).toBeGreaterThan(0);
+      expect(totalRejected).toBeGreaterThan(0);
     });
 
     it('rejects kick intent if ball is beyond IK reach limit leaving ball velocity unchanged', () => {

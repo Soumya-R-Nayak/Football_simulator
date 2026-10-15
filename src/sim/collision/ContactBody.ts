@@ -117,18 +117,22 @@ export function extractPlayerContactBodies(
   const currTorsoPos = Vector3.fromVector2(currState.position, torsoBaseZ);
   const torsoVel = currTorsoPos.sub(prevTorsoPos).scale(1 / safeDt);
 
+  const clampedT = Math.max(0, Math.min(1.0, tFrac));
+  const torsoPos2D = prevState.position.scale(1 - clampedT).add(currState.position.scale(clampedT));
+  const torsoCenter = Vector3.fromVector2(torsoPos2D, torsoBaseZ);
+
   bodies.push({
     id: 'torso',
     shape: {
       type: 'capsule',
-      p1: new Vector3(currState.position.x, currState.position.y, p1Z),
-      p2: new Vector3(currState.position.x, currState.position.y, p2Z),
+      p1: new Vector3(torsoPos2D.x, torsoPos2D.y, p1Z),
+      p2: new Vector3(torsoPos2D.x, torsoPos2D.y, p2Z),
       radius: torsoRadius,
       v1: torsoVel,
       v2: torsoVel,
     },
     prevPos: prevTorsoPos,
-    currPos: currTorsoPos,
+    currPos: torsoCenter,
     velocity: torsoVel,
     effMass: SIM_CONFIG.COLLISION.TORSO_EFF_MASS,
     restitution: SIM_CONFIG.COLLISION.TORSO_RESTITUTION,
@@ -138,7 +142,7 @@ export function extractPlayerContactBodies(
   });
 
   // 2. Evaluate Leg & Boot Kinematics at normalized tick fraction tFrac
-  const legPoses = poseAt(currState, tFrac, safeDt);
+  const legPoses = poseAt(prevState, currState, clampedT, safeDt);
 
   // Helper to generate thigh, shin, and boot colliders per leg
   const buildLegBodies = (isRight: boolean) => {

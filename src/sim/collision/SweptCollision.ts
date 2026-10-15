@@ -215,6 +215,43 @@ export class SweptCollisionResolver {
   }
 
   /**
+   * Recomputes contact point, surface normal, penetration depth, and segment parameter s
+   * against a body re-posed at tauImpact.
+   */
+  static refineContactGeometry(
+    ballPos: Vector3,
+    ballRadius: number,
+    body: ContactBody
+  ): { contactPoint: Vector3; normal: Vector3; penetration: number; sParam: number } {
+    if (body.shape.type === 'capsule') {
+      const p1 = body.shape.p1;
+      const p2 = body.shape.p2;
+      const radius = body.shape.radius;
+      const seg = p2.sub(p1);
+      const segLenSq = seg.lengthSq();
+      const sParam = segLenSq > 1e-8
+        ? Math.max(0, Math.min(1, ballPos.sub(p1).dot(seg) / segLenSq))
+        : 0.5;
+      const closestOnAxis = p1.add(seg.scale(sParam));
+      const diff = ballPos.sub(closestOnAxis);
+      const dist = diff.length();
+      const normal = dist > 1e-6 ? diff.scale(1 / dist) : new Vector3(0, 0, 1);
+      const penetration = Math.max(0, (radius + ballRadius) - dist);
+      const contactPoint = closestOnAxis.add(normal.scale(radius));
+      return { contactPoint, normal, penetration, sParam };
+    } else {
+      const center = body.shape.center;
+      const radius = body.shape.radius;
+      const diff = ballPos.sub(center);
+      const dist = diff.length();
+      const normal = dist > 1e-6 ? diff.scale(1 / dist) : new Vector3(0, 0, 1);
+      const penetration = Math.max(0, (radius + ballRadius) - dist);
+      const contactPoint = center.add(normal.scale(radius));
+      return { contactPoint, normal, penetration, sParam: 0.5 };
+    }
+  }
+
+  /**
    * Resolves collision impulse, Coulomb slip-stick friction, and angular spin.
    */
   static resolveImpulse(
@@ -307,7 +344,8 @@ export class SweptCollisionResolver {
     let deltaOmega = Vector3.zero();
     let jTangentialVec = Vector3.zero();
 
-    if (vTanSpeed > 1e-4) {
+    // Skip tangential impulse when jNormal == 0 or the contact is separating (vRelNormal >= 0)
+    if (vTanSpeed > 1e-4 && jNormal > 0 && vRelNormal < 0) {
       const uTan = vTangential.scale(1 / vTanSpeed);
 
       // Tangential Effective Mass (including ball moment of inertia: 1/m + r^2/I = 2.5/m for thin shell)
@@ -316,8 +354,8 @@ export class SweptCollisionResolver {
       // Slip-Stick Clamp: impulse needed to completely zero contact-point slip
       const jStick = vTanSpeed / invEffMassTan;
 
-      // Coulomb Friction Limit: mu * |j_normal|
-      const jMaxFriction = effectiveFriction * Math.max(0.1, jNormal);
+      // Coulomb Friction Limit: mu * j_normal
+      const jMaxFriction = effectiveFriction * jNormal;
 
       const jTanMag = Math.min(jStick, jMaxFriction);
       jTangentialVec = uTan.scale(-jTanMag);
