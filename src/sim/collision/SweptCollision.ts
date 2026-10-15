@@ -283,6 +283,18 @@ export class SweptCollisionResolver {
     const invMassBody = 1 / body.effMass;
     const invEffMassNormal = invMassBall + invMassBody;
 
+    // Zone power cap enforcement via speed-dependent restitution:
+    // If the prospective normal impulse from relative velocity would exceed what the boot zone structure
+    // can transmit (powerCap), the restitution compresses smoothly rather than artificially clamping post-impact velocity.
+    if (powerCap !== undefined && vRelNormal < 0) {
+      const maxNormalSpeed = powerCap;
+      const nominalPostSpeed = -(1 + effectiveRestitution) * vRelNormal / (1 + ballMass / body.effMass);
+      if (nominalPostSpeed > maxNormalSpeed) {
+        const requiredRestitution = Math.max(0.05, (maxNormalSpeed * (1 + ballMass / body.effMass) / -vRelNormal) - 1);
+        effectiveRestitution = Math.min(effectiveRestitution, requiredRestitution);
+      }
+    }
+
     if (vRelNormal < 0) {
       jNormal = -(1 + effectiveRestitution) * vRelNormal / invEffMassNormal;
     }
@@ -318,17 +330,6 @@ export class SweptCollisionResolver {
     // Total Linear Velocity Change: deltaV = (j_n * n + j_t) / m_ball
     let netImpulse = n.scale(jNormal).add(jTangentialVec);
     let deltaV = netImpulse.scale(invMassBall);
-
-    // Power Cap enforcement per boot zone
-    if (powerCap !== undefined) {
-      const postVel = ballVel.add(deltaV);
-      const postSpeed = postVel.length();
-      if (postSpeed > powerCap) {
-        const clampedVel = postVel.scale(powerCap / postSpeed);
-        deltaV = clampedVel.sub(ballVel);
-        netImpulse = deltaV.scale(ballMass);
-      }
-    }
 
     // Positional Penetration Resolution
     const separationBuffer = SIM_CONFIG.COLLISION.PENETRATION_BUFFER;

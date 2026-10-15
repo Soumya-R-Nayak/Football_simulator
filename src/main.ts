@@ -107,8 +107,8 @@ function bootstrap(): void {
       sim.simulateMatchTraffic(30);
       const totalMin = sim.getSimulatedMatchMinutes();
       showToast(`⏱️ Simulated +30 min Match Traffic (Total: ${totalMin}m)`);
-    } else if (e.code === 'KeyO' || e.code === 'KeyK') {
-      // O / K: Toggle physical 3D colliders debug overlay
+    } else if (e.code === 'Backquote' || e.code === 'F3') {
+      // ` or F3: Toggle physical 3D colliders debug overlay
       const enabled = renderer.toggleColliders();
       showToast(enabled ? '🎯 Collider Debug Overlay: ON' : '🎯 Collider Debug Overlay: OFF');
     }

@@ -97,15 +97,6 @@ export class KickSwingController {
     player: PlayerState,
     ball: BallState
   ): { success: boolean; reason?: string } {
-    const distToBall = Math.hypot(
-      ball.position.x - player.position.x,
-      ball.position.y - player.position.y
-    );
-
-    if (distToBall > SIM_CONFIG.KICK_SWING.KICK_REACH_M) {
-      return { success: false, reason: `Ball out of reach (${distToBall.toFixed(2)}m > ${SIM_CONFIG.KICK_SWING.KICK_REACH_M}m)` };
-    }
-
     // Foot selection: ball side relative to player facing
     const dx = ball.position.x - player.position.x;
     const dy = ball.position.y - player.position.y;
@@ -122,6 +113,23 @@ export class KickSwingController {
       this.activeFoot = player.attributes.footedness.dominantFoot === 'left' ? 'left' : 'right';
     }
 
+    // Reach check: uses reachable boot contact point (IK limit + ball radius) from kicking hip joint
+    const latSign = this.activeFoot === 'left' ? -1 : 1;
+    const hipOffset = SIM_CONFIG.COLLISION.HIP_OFFSET_Y;
+    const hipX = player.position.x + latX * (latSign * hipOffset);
+    const hipY = player.position.y + latY * (latSign * hipOffset);
+    const distFromHip2D = Math.hypot(ball.position.x - hipX, ball.position.y - hipY);
+    const maxBootReach =
+      SIM_CONFIG.COLLISION.THIGH_LEN +
+      SIM_CONFIG.COLLISION.SHIN_LEN +
+      SIM_CONFIG.COLLISION.BOOT_ANKLE_OFFSET_TOE +
+      SIM_CONFIG.COLLISION.BOOT_RADIUS +
+      SIM_CONFIG.BALL.RADIUS;
+
+    if (distFromHip2D > maxBootReach) {
+      return { success: false, reason: `Ball out of reach (${distFromHip2D.toFixed(2)}m > ${maxBootReach.toFixed(2)}m)` };
+    }
+
     this.currentIntent = intent;
     this.ankleStiffness = Math.max(0, Math.min(1, intent.ankleStiffness ?? 0.90));
 
@@ -136,8 +144,10 @@ export class KickSwingController {
 
     // Arrival efficiency accounts for swept impact occurring during forward stroke before full extension
     const arrivalEfficiency = 0.78;
+    const maxFootSpeedForZone = zoneProps.powerCap / Math.max(0.2, rCoeff * arrivalEfficiency);
     this.targetFootSpeed = Math.min(
       SIM_CONFIG.KICK_SWING.FOOT_SPEED_MAX,
+      maxFootSpeedForZone,
       intent.desiredSpeed / Math.max(0.2, rCoeff * arrivalEfficiency)
     );
 

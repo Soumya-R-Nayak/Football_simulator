@@ -601,10 +601,20 @@ describe('Slice 3b: FootKinematics, Leg Colliders, Boot Zones, and Kick Swing Co
       expect(postStrikeSpin!.length()).toBeLessThanOrEqual(1.5); // Knuckleball dead-center strike
     });
 
-    it('rejects kick intent if ball is out of reach (> 1.0 m) leaving ball velocity unchanged', () => {
+    it('accepts kick intent when ball is placed at 0.95 m within reachable boot contact envelope', () => {
       const sim = new SimulationCore();
       sim.reset(Vector2.zero(), 0);
-      // Place ball 1.50m away (> 1.0m reach limit)
+      // Place ball at 0.95m in front of player (within IK limit + ball radius reach)
+      sim.resetBall(new Vector3(0.95, 0, SIM_CONFIG.BALL.RADIUS));
+
+      const req = sim.requestKickPreset(1);
+      expect(req.success).toBe(true);
+    });
+
+    it('rejects kick intent if ball is beyond IK reach limit leaving ball velocity unchanged', () => {
+      const sim = new SimulationCore();
+      sim.reset(Vector2.zero(), 0);
+      // Place ball 1.50m away (> 1.24m IK reach limit)
       sim.resetBall(new Vector3(1.50, 0, SIM_CONFIG.BALL.RADIUS));
 
       const req = sim.requestKickPreset(1);
