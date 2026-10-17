@@ -75,6 +75,15 @@ export interface Intent {
   readonly gait: Gait;
   /** Locks torso orientation to current angle when true (jockeying / backpedaling) */
   readonly holdFacing: boolean;
+  /** Optional first-touch request; it affects a physical boot collision only. */
+  readonly ballControl?: BallControlIntent;
+}
+
+export type BallControlMode = 'receive' | 'trap';
+
+export interface BallControlIntent {
+  readonly mode: BallControlMode;
+  readonly preferredFoot?: FootId;
 }
 ```
 
@@ -90,9 +99,9 @@ export interface StrideState {
   phase: StridePhase;
   /** Progress through current phase [0.0, 1.0] */
   phaseProgress: number;
-  /** Dynamic cadence in strides per second (e.g. 2.4 Hz walk up to 4.2 Hz sprint) */
+  /** Dynamic alternating foot-contact rate in steps per second */
   cadence: number;
-  /** Dynamic stride length in meters (e.g. 0.8 m initial dig up to 2.1 m at full sprint) */
+  /** Estimated COM travel per contact in forward gaits, in meters */
   strideLength: number;
   /** World coordinates of the planted cleat on turf (null during flight) */
   plantPosition: Vector2 | null;
@@ -112,8 +121,14 @@ export interface PlayerState {
   readonly stamina: number;         // Normalized stamina pool [0.0, 1.0]
   readonly gait: Gait;              // Active gait
   readonly stride: StrideState;     // Discrete footstep and gait state
+  readonly contactState?: PlayerContactState;
 }
 ```
+
+`PlayerContactState` carries the COM position, velocity, and acceleration, a support margin and support flag, plus left and right `FootContactState` records. Each foot record includes 3D position and velocity, ground-contact and slip flags, gait phase/progress, and normal load. The property is optional for compatibility with older authored fixtures.
+
+### 3.4 Slice 3 receive contact
+`Intent.ballControl` expresses a requested receive or trap action and may specify a preferred foot. The current keyboard binding (<kbd>R</kbd>) requests `receive`. `SimulationCore` supplies the controlled response only for a rolling ball contacting a boot. It does not directly edit ball position or velocity; `SweptCollisionResolver` applies the response through its ordinary finite-mass impulse and friction calculation. `PlayerAttributes.firstTouch` and weak-foot ability affect the handling envelope. Full stride-timed dribbling, airborne first-touch, and shielding systems remain planned work.
 
 ---
 
@@ -194,7 +209,8 @@ Torso rotational speed is clamped to $\omega_{\max} \approx 6.0\text{ rad/s}$ ($
   * Gaits: Default `Jog`, `ShiftLeft` / `ShiftRight` = `Sprint`, `KeyZ` = `Walk`
   * Torso Lock: `Space` = `holdFacing` (locks torso heading at moment of press)
   * Dev Rotation: `ArrowLeft` / `ArrowRight` (manually rotates torso at $\omega_{\max}$)
-  * Reserved for Future Slices: `KeyI`, `KeyJ`, `KeyK`, `KeyL`, `KeyU`, `KeyO`, `KeyQ`, `KeyE`, `KeyR`, `KeyF`
+  * Ball control: `KeyR` requests a receive/cushion touch; `KeyE` requests a controlled slide; `KeyF` cycles foot dominance.
+  * Other development keys are documented in the README controls table.
 
 ---
 
@@ -212,9 +228,9 @@ Torso rotational speed is clamped to $\omega_{\max} \approx 6.0\text{ rad/s}$ ($
 
 ## 7. Phased Roadmap
 
-* **Slice 1 (Current)**: Single-player locomotion with discrete strides, Morin sprint kinetics, traction budget, virtual analog input, 40m headless sprint test, and debug canvas.
-* **Slice 2**: Free ball rigid body physics (aerodynamic drag, Magnus effect spin, turf rolling resistance, 3D bounce).
-* **Slice 3**: Micro-touch dribbling and foot-reach envelopes anchored to the stride cycle.
+* **Slice 1 (implemented)**: Contact-ready single-player locomotion with discrete strides, force/traction limits, COM and foot state, virtual analog input, and sprint/turn validation.
+* **Slice 2 (implemented)**: Free ball rigid-body physics (aerodynamic drag, Magnus effect, turf rolling resistance, 3D bounce).
+* **Slice 3 (in progress)**: Shared contact state and rolling-ball receive/cushion response are implemented. Stride-timed dribbling, full trapping, airborne first touches, and shielding remain planned.
 * **Slice 4**: Two-player passing, trajectory interception, and first-touch cushioning.
 * **Slice 5**: Perception, vision cone scanning, and pressure/shielding mechanics.
 * **Slice 6**: Goalkeeper tracking, shot-stopping, and shooting mechanics.

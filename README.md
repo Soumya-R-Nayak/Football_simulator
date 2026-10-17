@@ -12,13 +12,14 @@ Unlike arcade games that rely on artificial "magnetic glue" or pre-baked animati
 2. [Simulation Roadmap & Slices](#-simulation-roadmap--slices)
 3. [Slice 1: Locomotion & Physical Attributes](#-slice-1-locomotion--physical-attributes)
 4. [Slice 2: 3D Aerodynamic Ball Physics Core](#-slice-2-3d-aerodynamic-ball-physics-core)
-5. [Ball Models & Presets (Jabulani, Telstar, etc.)](#-ball-models--presets)
-6. [Pitch Agronomy, Wear Grid & Biomechanical Slipping](#-pitch-agronomy-wear-grid--biomechanical-slipping)
-7. [Environmental Physics & Pitch Quality Tiers](#-environmental-physics--pitch-quality-tiers-empirical-agronomy)
-8. [Interactive Controls Cheat-Sheet](#-interactive-controls-cheat-sheet)
-9. [Directory Structure](#-directory-structure)
-10. [Getting Started & Testing](#-getting-started--testing)
-11. [Scientific Documentation](#-scientific-documentation)
+5. [Slice 3: First Touch & Ball Control](#-slice-3-first-touch--ball-control)
+6. [Ball Models & Presets (Jabulani, Telstar, etc.)](#-ball-models--presets)
+7. [Pitch Agronomy, Wear Grid & Biomechanical Slipping](#-pitch-agronomy-wear-grid--biomechanical-slipping)
+8. [Environmental Physics & Pitch Quality Tiers](#-environmental-physics--pitch-quality-tiers-empirical-agronomy)
+9. [Interactive Controls Cheat-Sheet](#-interactive-controls-cheat-sheet)
+10. [Directory Structure](#-directory-structure)
+11. [Getting Started & Testing](#-getting-started--testing)
+12. [Scientific Documentation](#-scientific-documentation)
 
 ---
 
@@ -60,11 +61,10 @@ Unlike arcade games that rely on artificial "magnetic glue" or pre-baked animati
 │ • Pitch-Coupled Fatigue: Heavy mud/tall grass accelerates stamina drain │
 │ • Biomechanical Slipping (Traction Demand, FG vs SG Studs, Wipeout)   │
 ├────────────────────────────────────────────────────────────────────────┤
-│ SLICE 3: First Touch & Ball Manipulation Physics         [NEXT UP]     │
-│ • Physical body & cleat collision cylinder (no phasing through ball)   │
-│ • Stride-cycle dribbling touches (tight walk/jog vs sprint knock-on)   │
-│ • First touch cushion physics based on Agility, Balance & Weak Foot    │
-│ • Contextual body shielding & ball trapping                            │
+│ SLICE 3: First Touch & Ball Manipulation Physics       [IN PROGRESS]   │
+│ • Shared COM/foot contact state and physical boot collision            │
+│ • Receive/cushion response for rolling-ball boot contacts (R key)       │
+│ • Stride-cycle dribbling, trapping controls, and shielding [PLANNED]   │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,6 +97,11 @@ $$a(v) = a_0 \cdot \left(1 - \frac{v}{v_{\text{max}}}\right) \cdot \left[1 + \ka
 - **Controlled Linear ($\kappa = 0$)**: Standard elite linear force decay.
 - **Sustained Lengthy ($\kappa < 0$)**: Inverted pendulum mid-phase thrust sustained into top-speed sprinting ($20\text{--}40\text{ m}$).
 - **Energy Invariance Proof**: $\int_0^1 (1 - 2u)\,du = 0$ guarantees that $\kappa$ purely redistributes propulsive work across speed bands with zero synthetic energy inflation.
+
+---
+
+### Contact-ready movement state
+Locomotion exposes a reduced 3D contact state through `PlayerState.contactState`. It contains center-of-mass position, velocity, and acceleration; support status and margin; and each foot's 3D position and velocity, contact/slip state, gait phase, and normal load. This gives ball-contact code a shared movement-derived source for foot and body state. It is a reduced model, not a full articulated-body simulation.
 
 ---
 
@@ -263,6 +268,17 @@ Measured via the standard 0.5 kg Clegg Impact Soil Tester (CIV in gravities $g_{
 
 ---
 
+## 🦶 Slice 3: First Touch & Ball Control
+
+Slice 3 is in progress. The current implementation adds a receive request and a skill-scaled cushion response for rolling-ball contacts with a player's boot.
+
+- Hold <kbd>R</kbd> to request a receive touch. The request changes the boot's contact response only when the ball physically reaches a boot; it does not snap or reposition the ball.
+- The collision solver still calculates the impulse. A receive request lowers effective restitution and adds bounded tangential friction, so the ball loses more speed through the physical contact.
+- `firstTouch` and weak-foot ability shape the handling-speed envelope and response quality. Faster incoming contacts exceed that envelope more easily and receive less cushioning.
+- Full stride-timed dribbling, a dedicated trap control, airborne-ball first touches, shielding, and pressure effects are not implemented yet.
+
+---
+
 ## 🎮 Interactive Controls Cheat-Sheet
 
 | Control | Action | Details |
@@ -289,7 +305,7 @@ Measured via the standard 0.5 kg Clegg Impact Soil Tester (CIV in gravities $g_{
 | <kbd>3</kbd> | **Chipped Lob** | $16\text{ m/s}$, $28^\circ$ elevation, $+5.5\text{ RPS}$ backspin floating lift |
 | <kbd>4</kbd> | **Trivela Curve** | $22\text{ m/s}$, $10^\circ$ elevation, $-6\text{ RPS}$ outside boot curve |
 | <kbd>5</kbd> | **Knuckleball Strike** | $28\text{ m/s}$, $7.5^\circ$ elevation, $0\text{ spin}$ (test with Jabulani vs Telstar!) |
-| <kbd>R</kbd> | **Reset Ball** | Resets ball directly to player's feet at rest |
+| <kbd>R</kbd> | **Receive / Cushion** | Requests a controlled physical touch when a rolling ball contacts a boot |
 | <kbd>Click Pitch</kbd> | **Kick to Cursor** | Distance-scaled pass/shot (<kbd>Shift</kbd>+Click = Curve, <kbd>Alt</kbd>+Click = Lob) |
 | <kbd>Scroll</kbd> | **Zoom Viewport** | Dynamic camera zoom ($16\text{--}64\text{ px/m}$) |
 
@@ -317,7 +333,7 @@ Football/
 │   ├── render/                    # Presentation Layer (Decoupled from simulation)
 │   │   ├── CanvasRenderer.ts      # Pitch renderer, grass blades, divots, skid marks, 3D perspective
 │   │   └── TelemetryHUD.ts        # Biomechanical HUD telemetry, traction demand, speed graphs
-│   └── test/                      # Comprehensive Automated Vitest Test Suite (48 tests across 12 files)
+│   └── test/                      # Vitest unit and scenario tests for locomotion, contacts, ball, and pitch
 │       ├── pitch_tiers_and_drainage.test.ts # Darcy percolation, SubAir vacuum drainage, rain accumulation
 │       ├── pitch_topography_and_bobbles.test.ts # Multi-octave roughness, slope normals, micro-hops
 │       ├── atmospheric_wind_aerodynamics.test.ts # Wind vectors, crosswind deflection, carry modulation
@@ -362,7 +378,7 @@ npm run dev
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ### Running Automated Test Suite
-Runs all 48 unit tests across all 12 test files with Vitest:
+Runs the Vitest suite under `src/test`:
 ```bash
 npm test
 ```
