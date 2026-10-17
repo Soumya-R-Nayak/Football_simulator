@@ -133,6 +133,64 @@ describe('Slice 3b: FootKinematics, Leg Colliders, Boot Zones, and Kick Swing Co
       expect(poseA.right.ankle.x).toBe(poseA2.right.ankle.x);
       expect(poseA.right.ankleVel.x).toBe(poseA2.right.ankleVel.x);
     });
+
+    it('enforces natural-stride leg length constraint and bone lengths over walk, jog, and sprint for 240 ticks', () => {
+      const gaits: ('walk' | 'jog' | 'sprint')[] = ['walk', 'jog', 'sprint'];
+      const thighLen = SIM_CONFIG.COLLISION.THIGH_LEN;
+      const shinLen = SIM_CONFIG.COLLISION.SHIN_LEN;
+      const maxLegReach = thighLen + shinLen;
+
+      for (const gait of gaits) {
+        const sim = new SimulationCore();
+        sim.reset(Vector2.zero(), 0);
+
+        for (let t = 0; t < 240; t++) {
+          sim.step({ moveDir: new Vector2(1, 0), gait });
+          const player = sim.getCurrentState();
+          const prev = sim.getPreviousState();
+          const poses = poseAt(prev, player, 1.0, dt);
+
+          // Check left leg
+          const leftHipAnkleDist = poses.left.ankle.sub(poses.left.hip).length();
+          expect(leftHipAnkleDist).toBeLessThanOrEqual(maxLegReach + 0.001);
+
+          const leftThighLen = poses.left.knee.sub(poses.left.hip).length();
+          expect(Math.abs(leftThighLen - thighLen)).toBeLessThanOrEqual(0.001);
+
+          const leftShinLen = poses.left.ankle.sub(poses.left.knee).length();
+          expect(Math.abs(leftShinLen - shinLen)).toBeLessThanOrEqual(0.001);
+
+          // Check right leg
+          const rightHipAnkleDist = poses.right.ankle.sub(poses.right.hip).length();
+          expect(rightHipAnkleDist).toBeLessThanOrEqual(maxLegReach + 0.001);
+
+          const rightThighLen = poses.right.knee.sub(poses.right.hip).length();
+          expect(Math.abs(rightThighLen - thighLen)).toBeLessThanOrEqual(0.001);
+
+          const rightShinLen = poses.right.ankle.sub(poses.right.knee).length();
+          expect(Math.abs(rightShinLen - shinLen)).toBeLessThanOrEqual(0.001);
+
+          // Check extracted contact bodies thigh and shin capsules
+          const bodies = extractPlayerContactBodies(prev, player, dt, 1.0);
+          for (const leg of ['left', 'right']) {
+            const thigh = bodies.find((b) => b.id === `${leg}_thigh`)!;
+            const shin = bodies.find((b) => b.id === `${leg}_shin`)!;
+
+            if (thigh.shape.type === 'capsule') {
+              const thighAxisLen = thigh.shape.p2.sub(thigh.shape.p1).length();
+              const thighTotalLen = thighAxisLen + 2 * thigh.shape.radius;
+              expect(Math.abs(thighTotalLen - thighLen)).toBeLessThanOrEqual(0.001);
+            }
+
+            if (shin.shape.type === 'capsule') {
+              const shinAxisLen = shin.shape.p2.sub(shin.shape.p1).length();
+              const shinTotalLen = shinAxisLen + 2 * shin.shape.radius;
+              expect(Math.abs(shinTotalLen - shinLen)).toBeLessThanOrEqual(0.001);
+            }
+          }
+        }
+      }
+    });
   });
 
   describe('2. Leg & Boot Colliders', () => {
@@ -832,6 +890,47 @@ describe('Slice 3b: FootKinematics, Leg Colliders, Boot Zones, and Kick Swing Co
       expect(run1.bz).toBe(run2.bz);
       expect(run1.bvx).toBe(run2.bvx);
       expect(run1.bvy).toBe(run2.bvy);
+    });
+
+    it('ensures assigned boot velocity matches finite difference of boot position within 5% across backswing, forward_swing, and follow_through', () => {
+      for (let preset = 1; preset <= 5; preset++) {
+        const sim = new SimulationCore();
+        sim.reset(Vector2.zero(), 0);
+        sim.resetBall(new Vector3(0.60, 0, SIM_CONFIG.BALL.RADIUS));
+
+        const req = sim.requestKickPreset(preset);
+        expect(req.success).toBe(true);
+
+        const ctrl = sim.getKickController();
+
+        for (let t = 0; t < 35; t++) {
+          const overrideBefore = ctrl.getBootOverride();
+          const phaseBefore = ctrl.getState();
+          const centerBefore = overrideBefore ? overrideBefore.data.p1.add(overrideBefore.data.p2).scale(0.5) : null;
+
+          sim.step({ moveDir: Vector2.zero(), gait: 'jog' });
+
+          const overrideAfter = ctrl.getBootOverride();
+          const centerAfter = overrideAfter ? overrideAfter.data.p1.add(overrideAfter.data.p2).scale(0.5) : null;
+
+          if (centerBefore && centerAfter && overrideAfter) {
+            const phase = phaseBefore;
+            if (['backswing', 'forward_swing', 'follow_through'].includes(phase)) {
+              const fdVel = centerAfter.sub(centerBefore).scale(1 / dt);
+              const assignedVel = overrideAfter.data.v1;
+
+              const fdSpeed = fdVel.length();
+              const assignedSpeed = assignedVel.length();
+
+              if (fdSpeed > 0.1 || assignedSpeed > 0.1) {
+                const diff = fdVel.sub(assignedVel).length();
+                const relDiff = diff / Math.max(fdSpeed, assignedSpeed);
+                expect(relDiff).toBeLessThan(0.05);
+              }
+            }
+          }
+        }
+      }
     });
   });
 });

@@ -1,5 +1,5 @@
 import { Vector2 } from '../../math/Vector2';
-import { SIM_CONFIG } from '../config';
+import { getPlayerLegDimensions, SIM_CONFIG } from '../config';
 import { FootId, StridePhase, StrideState } from '../types';
 
 /**
@@ -19,6 +19,9 @@ export class StrideEngine {
   private plantPosition: Vector2 | null = null;
   private leftFootPos: Vector2 = Vector2.zero();
   private rightFootPos: Vector2 = Vector2.zero();
+  private stanceSwingStartPos: Vector2 | null = null;
+  private flightStartLeftFootPos: Vector2 | null = null;
+  private flightStartRightFootPos: Vector2 | null = null;
   private isBraking: boolean = false;
   private chopStepsRemaining: number = 0;
   private pelvicAngle: number = 0;
@@ -26,11 +29,13 @@ export class StrideEngine {
   private isDropStep: boolean = false;
   private dropStepTimer: number = 0;
   private isDoubleSupport: boolean = false;
+  private isWalkingMode: boolean = true;
   private heightCm: number = 180;
   private balance: number = 80;
 
   constructor(initialPos: Vector2, initialFacing: number) {
     this.updateFootRestPositions(initialPos, initialFacing, SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL);
+    this.stanceSwingStartPos = this.rightFootPos.clone();
   }
 
   setHeightCm(height: number): void {
@@ -85,7 +90,9 @@ export class StrideEngine {
     facing: number,
     moveAngleDiff: number = 0,
     signedTurnAngle: number = 0,
-    isHoldingFacing: boolean = false
+    isHoldingFacing: boolean = false,
+    comVelocity: Vector2 = Vector2.zero(),
+    comAcceleration: Vector2 = Vector2.zero()
   ): {
     forceMultiplier: number;
     lateralSwayAcc: Vector2;
@@ -105,7 +112,9 @@ export class StrideEngine {
       this.isDropStep = false;
       this.dropStepTimer = 0;
       this.isDoubleSupport = true;
+      this.isWalkingMode = true;
       this.updateFootRestPositions(playerPos, facing, SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL);
+      this.stanceSwingStartPos = (this.currentFoot === 'left' ? this.rightFootPos : this.leftFootPos).clone();
 
       return {
         forceMultiplier: 0,
@@ -115,7 +124,7 @@ export class StrideEngine {
         strideState: {
           ...this.getState(),
           cadence: 0,
-          strideLength: SIM_CONFIG.STRIDE.STRIDE_LEN_WALK,
+          strideLength: 0,
         },
       };
     }
@@ -141,7 +150,8 @@ export class StrideEngine {
       moveAngleDiff <= (3 * Math.PI) / 4;
 
     let cadence: number;
-    let strideLength: number;
+    let strideLength = 0;
+    let swingStrideLength: number;
     let swayAmp: number;
     let yawAmp: number;
     let activeStanceWidth: number;
@@ -149,12 +159,14 @@ export class StrideEngine {
     if (isBackpedal) {
       cadence = SIM_CONFIG.STRIDE.CADENCE_BACKPEDAL;
       strideLength = SIM_CONFIG.STRIDE.STRIDE_LEN_BACKPEDAL;
+      swingStrideLength = strideLength;
       swayAmp = SIM_CONFIG.STRIDE.SWAY_WALK * 0.5;
       yawAmp = SIM_CONFIG.STRIDE.PELVIC_YAW_WALK * 0.4;
       activeStanceWidth = SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL;
     } else if (isJockey) {
       cadence = SIM_CONFIG.STRIDE.CADENCE_JOCKEY;
       strideLength = SIM_CONFIG.STRIDE.STRIDE_LEN_JOCKEY;
+      swingStrideLength = strideLength;
       swayAmp = SIM_CONFIG.STRIDE.SWAY_JOCKEY;
       yawAmp = SIM_CONFIG.STRIDE.PELVIC_YAW_WALK * 0.5;
       activeStanceWidth = SIM_CONFIG.STRIDE.STANCE_WIDTH_JOCKEY;
@@ -164,18 +176,31 @@ export class StrideEngine {
 
       if (speed <= SIM_CONFIG.GAIT_SPEEDS.walk) {
         const t = Math.max(0, speed / SIM_CONFIG.GAIT_SPEEDS.walk);
-        cadence = 1.5 + (SIM_CONFIG.STRIDE.CADENCE_WALK - 1.5) * t;
-        strideLength = 0.5 + (SIM_CONFIG.STRIDE.STRIDE_LEN_WALK - 0.5) * t;
+        // Fast walking uses a higher cadence to keep the stance leg from
+        // trailing excessively at the configured walking speed ceiling.
+        cadence = 1.5 + (SIM_CONFIG.STRIDE.CADENCE_WALK - 1.5) * t + 0.5 * t * t;
+        swingStrideLength = 0.5 + (SIM_CONFIG.STRIDE.STRIDE_LEN_WALK - 0.5) * t;
         swayAmp = SIM_CONFIG.STRIDE.SWAY_WALK;
         yawAmp = SIM_CONFIG.STRIDE.PELVIC_YAW_WALK;
-      } else if (speed <= SIM_CONFIG.GAIT_SPEEDS.jog) {
+      } else if (speed <= SIM_CONFIG.GAIT_SPEEDS.run) {
         const t =
           (speed - SIM_CONFIG.GAIT_SPEEDS.walk) /
-          (SIM_CONFIG.GAIT_SPEEDS.jog - SIM_CONFIG.GAIT_SPEEDS.walk);
+          (SIM_CONFIG.GAIT_SPEEDS.run - SIM_CONFIG.GAIT_SPEEDS.walk);
         cadence =
           SIM_CONFIG.STRIDE.CADENCE_WALK +
-          (SIM_CONFIG.STRIDE.CADENCE_JOG - SIM_CONFIG.STRIDE.CADENCE_WALK) * t;
-        strideLength =
+          (SIM_CONFIG.STRIDE.CADENCE_RUN - SIM_CONFIG.STRIDE.CADENCE_WALK) * t;
+        // Fade the fast-walk cadence boost out smoothly before the walk-to-run
+        // transition, avoiding a step-rate cliff at 1.6 m/s without retuning jog.
+        const transitionEnd = SIM_CONFIG.STRIDE.WALK_TO_RUN_SPEED + 0.15;
+        if (speed < transitionEnd) {
+          const transitionT = Math.max(0, Math.min(1,
+            (speed - SIM_CONFIG.GAIT_SPEEDS.walk) /
+              (transitionEnd - SIM_CONFIG.GAIT_SPEEDS.walk)
+          ));
+          const smoothFade = 1 - transitionT * transitionT * (3 - 2 * transitionT);
+          cadence += 0.5 * smoothFade;
+        }
+        swingStrideLength =
           SIM_CONFIG.STRIDE.STRIDE_LEN_WALK +
           (SIM_CONFIG.STRIDE.STRIDE_LEN_JOG - SIM_CONFIG.STRIDE.STRIDE_LEN_WALK) * t;
         swayAmp =
@@ -187,13 +212,13 @@ export class StrideEngine {
       } else {
         const t = Math.min(
           1.0,
-          (speed - SIM_CONFIG.GAIT_SPEEDS.jog) /
-            (SIM_CONFIG.GAIT_SPEEDS.sprint - SIM_CONFIG.GAIT_SPEEDS.jog)
+          (speed - SIM_CONFIG.GAIT_SPEEDS.run) /
+            (SIM_CONFIG.GAIT_SPEEDS.sprint - SIM_CONFIG.GAIT_SPEEDS.run)
         );
         cadence =
-          SIM_CONFIG.STRIDE.CADENCE_JOG +
-          (SIM_CONFIG.STRIDE.CADENCE_SPRINT - SIM_CONFIG.STRIDE.CADENCE_JOG) * t;
-        strideLength =
+          SIM_CONFIG.STRIDE.CADENCE_RUN +
+          (SIM_CONFIG.STRIDE.CADENCE_SPRINT - SIM_CONFIG.STRIDE.CADENCE_RUN) * t;
+        swingStrideLength =
           SIM_CONFIG.STRIDE.STRIDE_LEN_JOG +
           (SIM_CONFIG.STRIDE.STRIDE_LEN_SPRINT - SIM_CONFIG.STRIDE.STRIDE_LEN_JOG) * t;
         swayAmp =
@@ -213,14 +238,68 @@ export class StrideEngine {
     const yawBalScale = 1.25 - 0.40 * balFactor;
     yawAmp *= yawBalScale;
 
-    // Scale stride length according to inverted pendulum leg length (sqrt of height ratio)
+    // Scale cadence inversely with leg length, then derive step length from v = f * L.
+    // This keeps foot-contact spacing consistent with the player's actual speed.
     const legScale = Math.sqrt(this.heightCm / 180);
-    strideLength *= legScale;
+    cadence /= legScale;
+    if (isBackpedal || isJockey) {
+      strideLength *= legScale;
+      swingStrideLength = strideLength;
+    } else {
+      swingStrideLength *= legScale;
+    }
 
-    // Step duration & phase partitioning
-    const stepDuration = 1 / (2 * cadence);
+    // Step duration & phase partitioning (cadence is defined in config as steps per second / Hz)
+    const stepDuration = 1 / cadence;
     const speedRatio = Math.min(1.0, speed / SIM_CONFIG.GAIT_SPEEDS.sprint);
-    const isWalking = speed < SIM_CONFIG.STRIDE.WALK_TO_RUN_SPEED;
+    // Avoid frame-to-frame gait switching when acceleration noise straddles the
+    // walk/run boundary. A little hysteresis keeps the contact sequence stable.
+    const gaitHysteresis = 0.12;
+    if (this.isWalkingMode && speed >= SIM_CONFIG.STRIDE.WALK_TO_RUN_SPEED + gaitHysteresis) {
+      this.isWalkingMode = false;
+    } else if (!this.isWalkingMode && speed <= SIM_CONFIG.STRIDE.WALK_TO_RUN_SPEED - gaitHysteresis) {
+      this.isWalkingMode = true;
+    }
+    const isWalking = this.isWalkingMode;
+
+    // Predict the COM at the next foot contact. Foot placement is defined from
+    // that future position, rather than as a fraction of stride length from the
+    // current COM; long strides therefore cannot create implausible overreach.
+    const travelDir = comVelocity.lengthSq() > 0.04
+      ? comVelocity.normalize()
+      : Vector2.fromAngle(facing);
+    const forwardAcceleration = comAcceleration.dot(travelDir);
+    const accelerationReach = Math.min(1, Math.max(0, forwardAcceleration) / 4);
+    const brakingReach = Math.min(1, Math.max(0, -forwardAcceleration) / 5);
+    // Center each foot's loaded interval around the COM's passage over it. A
+    // fixed short lead left the foot too far behind the COM at walk toe-off.
+    const speedLead = Math.max(0, speed - SIM_CONFIG.GAIT_SPEEDS.walk) * 0.04;
+    const touchdownOffset =
+      Math.max(0.30, (speed / Math.max(0.1, cadence)) * 0.5) + 0.12 +
+      speedLead - 0.05 * accelerationReach + 0.18 * brakingReach + (isDemandingBrake ? 0.04 : 0);
+    // Derive a conservative horizontal COM-to-foot envelope from the actual
+    // height-scaled hip and two-bone leg dimensions.
+    const legDimensions = getPlayerLegDimensions(this.heightCm);
+    const maxLegReach = legDimensions.thighLength + legDimensions.shinLength - 0.01;
+    const lowestHipHeight = legDimensions.hipHeight + SIM_CONFIG.PLAYER_BODY.VERTICAL_COM_MIN_OFFSET;
+    const verticalLegSpan = Math.max(0.05, lowestHipHeight - SIM_CONFIG.COLLISION.FOOT_STANCE_Z);
+    // Leave a small reserve inside the full-extension IK envelope. This limits
+    // foot plants relative to the COM rather than allowing the stance leg to
+    // reach its geometric limit and forcing the pelvis down to preserve contact.
+    const maxHorizontalReach = Math.min(legDimensions.scale * 0.50, Math.sqrt(Math.max(
+      0.04,
+      maxLegReach * maxLegReach - verticalLegSpan * verticalLegSpan
+    )) * 0.98 + legDimensions.hipTranslationMax * 0.75);
+    const constrainFootTarget = (target: Vector2, predictedCom: Vector2): Vector2 => {
+      const relative = target.sub(predictedCom);
+      const maxReach = Math.min(SIM_CONFIG.STRIDE.MAX_LEG_LENGTH * legDimensions.scale, maxHorizontalReach);
+      return predictedCom.add(relative.clampLength(maxReach));
+    };
+    const predictCom = (seconds: number): Vector2 => {
+      const t = Math.max(0, Math.min(0.8, seconds));
+      const boundedAcceleration = comAcceleration.clampLength(8);
+      return playerPos.add(comVelocity.scale(t)).add(boundedAcceleration.scale(0.5 * t * t));
+    };
 
     let stanceDuration = 0;
     let flightDuration = 0;
@@ -229,6 +308,15 @@ export class StrideEngine {
     if (isWalking) {
       // Inverted Pendulum Walk: No flight phase!
       // Step cycle consists of single support and double-support overlap
+      if (this.phase === 'flight') {
+        // If speed drops through the walk/run boundary mid-flight, end flight on
+        // the lead foot already in motion instead of reclassifying the trail foot
+        // as planted. This keeps the contact order and foot positions continuous.
+        this.currentFoot = this.currentFoot === 'left' ? 'right' : 'left';
+        this.plantPosition = (this.currentFoot === 'left' ? this.leftFootPos : this.rightFootPos).clone();
+        this.stanceSwingStartPos = (this.currentFoot === 'left' ? this.rightFootPos : this.leftFootPos).clone();
+        this.phaseProgress = 0;
+      }
       currentPhaseDuration = stepDuration;
       stanceDuration = stepDuration;
       flightDuration = 0;
@@ -259,6 +347,18 @@ export class StrideEngine {
       this.phaseProgress += dt / currentPhaseDuration;
     }
 
+    // Phase boundaries land on fixed simulation ticks, so the realized contact
+    // rate differs slightly from the requested cadence. Report that realized
+    // rate and derive the COM step distance from it.
+    const ticksFor = (duration: number): number => Math.max(1, Math.ceil(duration / dt - 1e-9));
+    const realizedStepDuration = isWalking
+      ? ticksFor(stepDuration) * dt
+      : (ticksFor(stanceDuration) + ticksFor(flightDuration)) * dt;
+    cadence = 1 / realizedStepDuration;
+    if (!isBackpedal && !isJockey) {
+      strideLength = speed / cadence;
+    }
+
     // Chop-step braking detection
     if (isDemandingBrake && this.chopStepsRemaining === 0 && speed > 2.0) {
       this.chopStepsRemaining = speed > 6.0 ? 3 : speed > 3.5 ? 2 : 1;
@@ -275,35 +375,18 @@ export class StrideEngine {
         // Walking foot transition: trailing foot lifts off, leading foot becomes stance foot
         this.currentFoot = this.currentFoot === 'left' ? 'right' : 'left';
         this.isDoubleSupport = false;
-
-        const halfWidth = activeStanceWidth / 2;
-        const lateralSign = this.currentFoot === 'left' ? -1 : 1;
-        const rightVec = Vector2.fromAngle(facing + Math.PI / 2);
-        const forwardVec = Vector2.fromAngle(facing);
-
-        let forwardReach = isBrakingPlant
-          ? Math.min(SIM_CONFIG.STRIDE.REACH_FWD_MAX, strideLength * 0.45)
-          : Math.min(SIM_CONFIG.STRIDE.REACH_FWD_MAX, strideLength * 0.35);
-
-        if (this.isDropStep) {
-          forwardReach = -SIM_CONFIG.STRIDE.DROP_STEP_OFFSET;
-        }
-
-        const plantOffset = forwardVec
-          .scale(forwardReach)
-          .add(rightVec.scale(lateralSign * halfWidth));
-
-        const clampedOffset = plantOffset.clampLength(SIM_CONFIG.STRIDE.MAX_LEG_LENGTH);
-        this.plantPosition = playerPos.add(clampedOffset);
-
-        if (this.currentFoot === 'left') {
-          this.leftFootPos = this.plantPosition.clone();
-        } else {
-          this.rightFootPos = this.plantPosition.clone();
-        }
+        // The incoming foot already has a world-space swing trajectory. Anchor it
+        // where it arrived instead of teleporting it to a newly computed target.
+        this.plantPosition = (this.currentFoot === 'left' ? this.leftFootPos : this.rightFootPos).clone();
+        this.stanceSwingStartPos = (this.currentFoot === 'left' ? this.rightFootPos : this.leftFootPos).clone();
       } else {
         // Running phase transition: Stance <-> Flight
         if (this.phase === 'stance') {
+          // Keep both feet continuous at toe-off. The previous implementation
+          // rebuilt them from COM-relative offsets on the first flight frame,
+          // moving the planted foot several centimetres in one simulation tick.
+          this.flightStartLeftFootPos = this.leftFootPos.clone();
+          this.flightStartRightFootPos = this.rightFootPos.clone();
           this.phase = 'flight';
           this.plantPosition = null;
         } else {
@@ -318,31 +401,10 @@ export class StrideEngine {
             }
           }
 
-          const halfWidth = activeStanceWidth / 2;
-          const lateralSign = this.currentFoot === 'left' ? -1 : 1;
-          const rightVec = Vector2.fromAngle(facing + Math.PI / 2);
-          const forwardVec = Vector2.fromAngle(facing);
-
-          let forwardReach = isBrakingPlant
-            ? Math.min(SIM_CONFIG.STRIDE.REACH_FWD_MAX, strideLength * 0.45)
-            : Math.min(SIM_CONFIG.STRIDE.REACH_FWD_MAX, strideLength * 0.35);
-
-          if (this.isDropStep) {
-            forwardReach = -SIM_CONFIG.STRIDE.DROP_STEP_OFFSET;
-          }
-
-          const plantOffset = forwardVec
-            .scale(forwardReach)
-            .add(rightVec.scale(lateralSign * halfWidth));
-
-          const clampedOffset = plantOffset.clampLength(SIM_CONFIG.STRIDE.MAX_LEG_LENGTH);
-          this.plantPosition = playerPos.add(clampedOffset);
-
-          if (this.currentFoot === 'left') {
-            this.leftFootPos = this.plantPosition.clone();
-          } else {
-            this.rightFootPos = this.plantPosition.clone();
-          }
+          // Contact occurs at the foot's current trajectory endpoint. Reusing that
+          // point preserves continuity and makes the stance anchor truly fixed.
+          this.plantPosition = (this.currentFoot === 'left' ? this.leftFootPos : this.rightFootPos).clone();
+          this.stanceSwingStartPos = (this.currentFoot === 'left' ? this.rightFootPos : this.leftFootPos).clone();
         }
       }
     }
@@ -352,27 +414,30 @@ export class StrideEngine {
       const halfWidth = activeStanceWidth / 2;
       const otherSign = this.currentFoot === 'left' ? 1 : -1;
       const rightVec = Vector2.fromAngle(facing + Math.PI / 2);
-      const forwardVec = Vector2.fromAngle(facing);
 
       if (this.isDoubleSupport) {
-        // Both feet planted on turf during double-support
-        const frontPlantOffset = forwardVec
-          .scale(strideLength * 0.35)
-          .add(rightVec.scale(otherSign * halfWidth));
-        const frontPlantPos = playerPos.add(frontPlantOffset);
-        if (this.currentFoot === 'left') {
-          this.rightFootPos = frontPlantPos;
-        } else {
-          this.leftFootPos = frontPlantPos;
-        }
+        // Both positions were fixed at their contact events. Keep both anchors
+        // stationary throughout double support instead of dragging them with COM.
       } else {
         // Single support: swing foot travelling forward past stance foot
         const swingProgress = Math.min(
           1.0,
           this.phaseProgress / (1.0 - SIM_CONFIG.STRIDE.DOUBLE_SUPPORT_FRACTION)
         );
-        const swingOffset = forwardVec.scale(strideLength * (swingProgress - 0.5) * 0.7);
-        const swingPos = playerPos.add(rightVec.scale(otherSign * halfWidth)).add(swingOffset);
+        const contactTime = stepDuration * Math.max(
+          0,
+          1 - SIM_CONFIG.STRIDE.DOUBLE_SUPPORT_FRACTION - this.phaseProgress
+        );
+        const predictedCom = predictCom(contactTime);
+        const swingTarget = constrainFootTarget(
+          predictedCom
+            .add(rightVec.scale(otherSign * halfWidth))
+            .add(travelDir.scale(touchdownOffset)),
+          predictedCom
+        );
+        const easedProgress = swingProgress * swingProgress * (3 - 2 * swingProgress);
+        const swingStart = this.stanceSwingStartPos ?? swingTarget;
+        const swingPos = swingStart.add(swingTarget.sub(swingStart).scale(easedProgress));
         if (this.currentFoot === 'left') {
           this.rightFootPos = swingPos;
         } else {
@@ -384,12 +449,21 @@ export class StrideEngine {
       const halfWidth = activeStanceWidth / 2;
       const otherSign = this.currentFoot === 'left' ? 1 : -1;
       const rightVec = Vector2.fromAngle(facing + Math.PI / 2);
-      const forwardVec = Vector2.fromAngle(facing);
 
-      const swingOffset = forwardVec
-        .scale(strideLength * (this.phaseProgress - 0.5) * 0.6)
-        .clampLength(SIM_CONFIG.STRIDE.MAX_LEG_LENGTH);
-      const swingPos = playerPos.add(rightVec.scale(otherSign * halfWidth)).add(swingOffset);
+      // During stance, bring the swing leg to a compact toe-off position. It
+      // should not already be at the landing point beyond the upcoming flight.
+      const timeToContact = Math.max(0, stanceDuration * (1 - this.phaseProgress));
+      const predictedCom = predictCom(timeToContact);
+      const swingTarget = constrainFootTarget(
+        predictedCom
+          .add(rightVec.scale(otherSign * halfWidth))
+          .add(travelDir.scale(touchdownOffset)),
+        predictedCom
+      );
+      const p = this.phaseProgress;
+      const easedProgress = p * p * (3 - 2 * p);
+      const swingStart = this.stanceSwingStartPos ?? swingTarget;
+      const swingPos = swingStart.add(swingTarget.sub(swingStart).scale(easedProgress));
 
       if (this.currentFoot === 'left') {
         this.rightFootPos = swingPos;
@@ -402,21 +476,29 @@ export class StrideEngine {
       const forwardVec = Vector2.fromAngle(facing);
 
       // In flight, currentFoot just pushed off (trail foot), other foot is lead reaching forward
-      const leadOffset = forwardVec
-        .scale(strideLength * (0.28 + this.phaseProgress * 0.07))
-        .clampLength(SIM_CONFIG.STRIDE.MAX_LEG_LENGTH);
+      const timeToContact = flightDuration * Math.max(0, 1 - this.phaseProgress);
+      const predictedCom = predictCom(timeToContact);
+      const leadTarget = constrainFootTarget(
+        predictedCom
+          .add(rightVec.scale(this.currentFoot === 'left' ? halfWidth : -halfWidth))
+          .add(travelDir.scale(touchdownOffset)),
+        predictedCom
+      );
 
       const trailOffset = forwardVec
-        .scale(strideLength * (-0.30 + this.phaseProgress * 0.25))
+        .scale(swingStrideLength * (-0.30 + this.phaseProgress * 0.25))
         .clampLength(SIM_CONFIG.STRIDE.MAX_LEG_LENGTH);
 
-      if (this.currentFoot === 'left') {
-        this.leftFootPos = playerPos.add(rightVec.scale(-halfWidth)).add(trailOffset);
-        this.rightFootPos = playerPos.add(rightVec.scale(halfWidth)).add(leadOffset);
-      } else {
-        this.rightFootPos = playerPos.add(rightVec.scale(halfWidth)).add(trailOffset);
-        this.leftFootPos = playerPos.add(rightVec.scale(-halfWidth)).add(leadOffset);
-      }
+      const trailTargetLeft = playerPos.add(rightVec.scale(-halfWidth)).add(trailOffset);
+      const trailTargetRight = playerPos.add(rightVec.scale(halfWidth)).add(trailOffset);
+      const targetLeft = this.currentFoot === 'left' ? trailTargetLeft : leadTarget;
+      const targetRight = this.currentFoot === 'right' ? trailTargetRight : leadTarget;
+      const p = this.phaseProgress;
+      const smoothProgress = p * p * (3 - 2 * p);
+      const startLeft = this.flightStartLeftFootPos ?? this.leftFootPos;
+      const startRight = this.flightStartRightFootPos ?? this.rightFootPos;
+      this.leftFootPos = startLeft.add(targetLeft.sub(startLeft).scale(smoothProgress));
+      this.rightFootPos = startRight.add(targetRight.sub(startRight).scale(smoothProgress));
     }
 
     // Foot lateral sign: left is -1, right is +1
@@ -443,14 +525,18 @@ export class StrideEngine {
     } else if (this.phase === 'stance') {
       const dutyCycle = Math.max(0.3, Math.min(0.8, stanceDuration / stepDuration));
 
-      if (speed > 2.0 && this.phaseProgress < 0.22 && !isDemandingBrake) {
-        // Initial foot strike impact dip (slight negative braking before drive)
+      if (isDemandingBrake) {
+        // Active braking plant: firm decelerative ground reaction impulse throughout stance
+        forceMultiplier =
+          Math.sin(this.phaseProgress * Math.PI) * (Math.PI / (2 * dutyCycle));
+      } else if (speed > 2.0 && this.phaseProgress < 0.22) {
+        // Forward drive: initial foot strike impact dip (slight negative braking before drive)
         const dipProgress = this.phaseProgress / 0.22;
         forceMultiplier = -0.35 * Math.sin(dipProgress * Math.PI);
       } else {
         // Main propulsive drive
         const driveStart = speed > 2.0 ? 0.22 : 0.0;
-        const driveProgress = (this.phaseProgress - driveStart) / (1.0 - driveStart);
+        const driveProgress = Math.max(0, (this.phaseProgress - driveStart) / (1.0 - driveStart));
         const driveDutyCycle = dutyCycle * (1.0 - driveStart);
         forceMultiplier =
           Math.sin(driveProgress * Math.PI) * (Math.PI / (2 * driveDutyCycle));
@@ -516,6 +602,8 @@ export class StrideEngine {
     this.isDropStep = false;
     this.dropStepTimer = 0;
     this.isDoubleSupport = true;
+    this.isWalkingMode = true;
     this.updateFootRestPositions(playerPos, facing, SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL);
+    this.stanceSwingStartPos = this.rightFootPos.clone();
   }
 }

@@ -17,8 +17,9 @@ export const SIM_CONFIG = {
 
   // Athlete Gait Speeds (m/s)
   GAIT_SPEEDS: {
-    walk: 2.2,   // ~7.9 km/h
-    jog: 4.8,    // ~17.3 km/h (default movement)
+    walk: 1.6,   // 5.8 km/h brisk walking; keep steps within comfortable leg reach
+    jog: 3.8,    // ~13.7 km/h; upper end of common soccer jogging bands
+    run: 4.8,    // ~17.3 km/h; running reference speed for stride interpolation
     sprint: 9.4, // ~33.8 km/h (sprint button)
   },
 
@@ -28,7 +29,8 @@ export const SIM_CONFIG = {
     A_PROP_MAX: 9.5,      // Max forward propulsive acceleration from standstill (m/s²)
     A_BRAKE_MAX: 8.5,     // Max braking deceleration on cleat plant (m/s²)
     A_LAT_MAX: 6.5,       // Max lateral centripetal cutting acceleration (m/s²)
-    OMEGA_MAX: 6.0,       // Max torso angular turn rate (rad/s, ~344 deg/s)
+    OMEGA_MAX: 6.0,       // Baseline max torso angular speed (rad/s)
+    ALPHA_YAW_MAX: 18.0,   // Baseline torso angular acceleration with firm support (rad/s²)
     SPEED_FACTOR_SIDE: 0.65, // Max speed factor when moving sideways (90 deg to torso)
     SPEED_FACTOR_BACK: 0.55, // Max speed factor when backpedaling (180 deg to torso)
   },
@@ -36,16 +38,16 @@ export const SIM_CONFIG = {
   // Discrete Stride Engine & Biomechanics
   STRIDE: {
     // Cadence / Step Frequencies (Hz - steps per second)
-    CADENCE_WALK: 1.9,        // ~114 steps/min (relaxed human walk)
-    CADENCE_JOG: 2.8,         // ~168 steps/min (aerobic endurance run)
+    CADENCE_WALK: 1.9,        // ~114 steps/min baseline brisk-walk cadence
+    CADENCE_RUN: 2.8,         // ~168 steps/min at the running reference speed
     CADENCE_SPRINT: 4.3,      // ~258 steps/min (elite sprint frequency)
     CADENCE_JOCKEY: 3.2,      // ~192 steps/min (rapid defensive shuffle)
     CADENCE_BACKPEDAL: 3.6,   // ~216 steps/min (rapid high-frequency backpedal)
 
-    // Stride Lengths (meters per step)
-    STRIDE_LEN_WALK: 0.78,    // Natural walking step
-    STRIDE_LEN_JOG: 1.40,     // Cruising jog stride
-    STRIDE_LEN_SPRINT: 2.15,  // Open sprint flight stride
+    // Foot recovery distances used to shape swing poses (m; not measured step length)
+    STRIDE_LEN_WALK: 0.78,
+    STRIDE_LEN_JOG: 1.40,
+    STRIDE_LEN_SPRINT: 2.15,
     STRIDE_LEN_JOCKEY: 0.65,  // Choppy lateral slide
     STRIDE_LEN_BACKPEDAL: 0.60, // Short backward reach
 
@@ -69,9 +71,9 @@ export const SIM_CONFIG = {
     STANCE_WIDTH_JOCKEY: 0.44, // Wide athletic defensive base (m)
     DROP_STEP_DURATION: 0.07,  // Initial false-step hip drop on explosive start (s)
     DROP_STEP_OFFSET: 0.09,    // Backward drive foot anchor on drop step (m)
-    MAX_LEG_LENGTH: 1.05,     // Inseam reach limit (m)
-    REACH_FWD_MAX: 0.90,      // Max forward plant reach from hip (m)
-    REACH_BACK_MAX: 0.80,     // Max backward push reach from hip (m)
+    MAX_LEG_LENGTH: 0.65,     // Inseam reach limit (m)
+    REACH_FWD_MAX: 0.65,      // Max forward plant reach from hip (m)
+    REACH_BACK_MAX: 0.65,     // Max backward push reach from hip (m)
     REACH_LAT_MIN: 0.05,      // Min lateral offset from centerline (m)
     REACH_LAT_MAX: 0.60,      // Max lateral abduction reach (m)
     MAX_TORSO_TWIST: 0.698,   // Max torso twist relative to pelvic propulsion (40 deg in rad)
@@ -87,8 +89,9 @@ export const SIM_CONFIG = {
 
   // Visual/Render Dimensions & 3D Lean (meters)
   PLAYER_BODY: {
-    TORSO_RADIUS: 0.32,  // Player body circle radius for rendering & collision (m)
-    HEAD_RADIUS: 0.14,   // Head radius (m)
+    TORSO_RADIUS: 0.24,  // Top-down torso shadow radius (collision uses COLLISION.TORSO_RADIUS)
+    SHOULDER_WIDTH: 0.42, // Adult shoulder breadth at 1.80 m reference stature
+    HEAD_RADIUS: 0.08,   // Head half-width for the top-down player drawing (m)
     CLEAT_LENGTH: 0.26,  // Boot visual length (m)
     CLEAT_WIDTH: 0.10,   // Boot visual width (m)
     MAX_ACCEL_LEAN: 0.18,  // Head forward/backward lean displacement (m)
@@ -97,6 +100,11 @@ export const SIM_CONFIG = {
     MAX_GAZE_LEAD: 0.28,   // Max head look-ahead yaw during steering (rad, ~16°)
     DRIVE_PHASE_LEAN_BOOST: 0.08, // Extra forward lean in initial 0-4.5 m/s sprint drive (m)
     VERTICAL_BOUNCE_MAX: 0.055,   // Max vertical COM displacement in flight (m)
+    COM_HEIGHT_RATIO: 0.55,        // Standing COM height as a fraction of player stature
+    VERTICAL_COM_MIN_OFFSET: -0.12, // Maximum COM compression below standing height (m)
+    VERTICAL_COM_SPRING_HZ: 12.0, // Stance support response frequency (rad/s)
+    VERTICAL_COM_DAMPING_RATIO: 1.0,
+    VERTICAL_COM_MAX_SUPPORT_G: 3.5,
   },
 
   // FIFA Standard Size 5 Match Ball & 3D Aerodynamics (Slice 2)
@@ -129,6 +137,7 @@ export const SIM_CONFIG = {
     // Foot & Leg Anthropometrics (2-Bone IK Chain)
     HIP_HEIGHT: 0.90,               // meters (pelvis joint height)
     HIP_OFFSET_Y: 0.12,             // meters (lateral separation of hip joints from midline)
+    HIP_TRANSLATION_MAX: 0.12,      // meters (pelvis shift toward the support base during stance)
     THIGH_LEN: 0.44,                // meters (femur length hip -> knee)
     SHIN_LEN: 0.44,                 // meters (tibia length knee -> ankle)
     THIGH_RADIUS: 0.10,             // meters (surface radius for thigh capsule)
@@ -223,3 +232,19 @@ export const SIM_CONFIG = {
     MAX_STRIDE_WAIT_TIME: 0.40,     // Max wait time for running stride alignment (seconds)
   },
 } as const;
+
+/** Player leg proportions scaled from the 1.80 m reference athlete. */
+export function getPlayerLegDimensions(heightCm: number) {
+  const scale = Math.max(0.75, Math.min(1.25, heightCm / 180));
+  const collision = SIM_CONFIG.COLLISION;
+  return {
+    scale,
+    hipHeight: collision.HIP_HEIGHT * scale,
+    hipOffsetY: collision.HIP_OFFSET_Y * scale,
+    hipTranslationMax: collision.HIP_TRANSLATION_MAX * scale,
+    thighLength: collision.THIGH_LEN * scale,
+    shinLength: collision.SHIN_LEN * scale,
+    thighRadius: collision.THIGH_RADIUS * scale,
+    shinRadius: collision.SHIN_RADIUS * scale,
+  };
+}

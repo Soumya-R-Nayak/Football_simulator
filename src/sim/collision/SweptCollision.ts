@@ -1,6 +1,7 @@
 import { Vector3 } from '../../math/Vector3';
 import { SIM_CONFIG } from '../config';
 import { BootZoneId, classifyBootContact } from './BootZones';
+import { ControlledBootResponse } from './BallControl';
 import { CapsuleShape, ContactBody, SphereShape } from './ContactBody';
 
 export interface ContactManifold {
@@ -10,6 +11,7 @@ export interface ContactManifold {
   readonly normal: Vector3;        // Unit normal pointing FROM body TO ball
   readonly penetration: number;
   readonly body: ContactBody;
+  readonly sParam?: number;
 }
 
 export interface CollisionImpulseResult {
@@ -260,7 +262,8 @@ export class SweptCollisionResolver {
     ballSpin: Vector3,
     ballMass: number,
     ballInertia: number,
-    ballRadius: number
+    ballRadius: number,
+    controlledBootResponse?: ControlledBootResponse | null
   ): CollisionImpulseResult {
     const body = manifold.body;
     const n = manifold.normal;
@@ -330,6 +333,16 @@ export class SweptCollisionResolver {
         const requiredRestitution = Math.max(0.05, (maxNormalSpeed * (1 + ballMass / body.effMass) / -vRelNormal) - 1);
         effectiveRestitution = Math.min(effectiveRestitution, requiredRestitution);
       }
+    }
+
+    // A deliberate cushion changes boot compliance, while retaining the same
+    // finite-mass impulse and Coulomb-friction calculation as passive contact.
+    if (controlledBootResponse && vRelNormal < 0) {
+      const approachSpeed = -vRelNormal;
+      const excessSpeed = Math.max(0, approachSpeed - controlledBootResponse.handlingSpeedMps);
+      const skillAdjustedRestitution = controlledBootResponse.baseRestitution + excessSpeed * 0.08;
+      effectiveRestitution = Math.min(effectiveRestitution, skillAdjustedRestitution);
+      effectiveFriction = Math.min(1.2, effectiveFriction + controlledBootResponse.frictionBonus);
     }
 
     if (vRelNormal < 0) {

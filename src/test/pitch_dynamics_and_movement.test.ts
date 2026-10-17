@@ -104,8 +104,8 @@ describe('Pitch Dynamics & Movement Effects Subsystem', () => {
       manualTurn: 0,
     };
 
-    // Accelerate both players to sprint speed for 1.5 seconds
-    for (let i = 0; i < 180; i++) {
+    // Accelerate both players to sprint speed before the slide setup.
+    for (let i = 0; i < 240; i++) {
       simWet.step(sprintIntent);
       simDry.step(sprintIntent);
     }

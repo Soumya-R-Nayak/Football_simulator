@@ -1,5 +1,5 @@
 import { Vector3 } from '../../math/Vector3';
-import { SIM_CONFIG } from '../config';
+import { getPlayerLegDimensions, SIM_CONFIG } from '../config';
 import { PlayerState } from '../types';
 import { poseAt } from './LegKinematics';
 
@@ -104,20 +104,32 @@ export function extractPlayerContactBodies(
 ): ContactBody[] {
   const safeDt = Math.max(1e-4, dt);
   const bodies: ContactBody[] = [];
+  const clampedT = Math.max(0, Math.min(1.0, tFrac));
 
-  // 1. Torso 3D Capsule (starts at pelvis z = 0.85m to allow ground ball dribbling between legs)
-  const torsoBaseZ = SIM_CONFIG.COLLISION.TORSO_BASE_Z;
+  // 1. Evaluate Leg & Boot Kinematics at normalized tick fraction tFrac
+  const legPoses = poseAt(prevState, currState, clampedT, safeDt);
+
+  // Track the reduced vertical COM response through the pelvis and torso colliders.
+  const meanHipZ = (legPoses.left.hip.z + legPoses.right.hip.z) * 0.5;
+  const legDimensions = getPlayerLegDimensions(currState.attributes.heightCm);
+  const pelvisOffset = meanHipZ - legDimensions.hipHeight;
+  const torsoBaseZ = SIM_CONFIG.COLLISION.TORSO_BASE_Z + pelvisOffset;
+
   const playerHeight = currState.attributes.heightCm / 100;
-  const torsoTopZ = Math.max(torsoBaseZ + 0.30, playerHeight);
+  const torsoTopZ = Math.max(torsoBaseZ + 0.30, playerHeight + pelvisOffset);
   const torsoRadius = SIM_CONFIG.COLLISION.TORSO_RADIUS;
   const p1Z = torsoBaseZ + torsoRadius;
   const p2Z = Math.max(p1Z, torsoTopZ - torsoRadius);
 
   const prevTorsoPos = Vector3.fromVector2(prevState.position, torsoBaseZ);
   const currTorsoPos = Vector3.fromVector2(currState.position, torsoBaseZ);
-  const torsoVel = currTorsoPos.sub(prevTorsoPos).scale(1 / safeDt);
+  const torsoPlanarVel = currTorsoPos.sub(prevTorsoPos).scale(1 / safeDt);
+  const torsoVel = new Vector3(
+    torsoPlanarVel.x,
+    torsoPlanarVel.y,
+    currState.contactState?.centerOfMassVelocity.z ?? 0
+  );
 
-  const clampedT = Math.max(0, Math.min(1.0, tFrac));
   const torsoPos2D = prevState.position.scale(1 - clampedT).add(currState.position.scale(clampedT));
   const torsoCenter = Vector3.fromVector2(torsoPos2D, torsoBaseZ);
 
@@ -141,9 +153,6 @@ export function extractPlayerContactBodies(
     active: false,
   });
 
-  // 2. Evaluate Leg & Boot Kinematics at normalized tick fraction tFrac
-  const legPoses = poseAt(prevState, currState, clampedT, safeDt);
-
   // Helper to generate thigh, shin, and boot colliders per leg
   const buildLegBodies = (isRight: boolean) => {
     const leg = isRight ? legPoses.right : legPoses.left;
@@ -151,7 +160,7 @@ export function extractPlayerContactBodies(
     const isLoaded = leg.loaded;
 
     // A. Thigh Capsule (hip -> knee)
-    const thighRadius = SIM_CONFIG.COLLISION.THIGH_RADIUS;
+    const thighRadius = legDimensions.thighRadius;
     const thighShape = createInsetCapsule(leg.hip, leg.knee, thighRadius, leg.hipVel, leg.kneeVel);
     const thighCenter = leg.hip.add(leg.knee).scale(0.5);
     const thighVel = leg.hipVel.add(leg.kneeVel).scale(0.5);
@@ -170,7 +179,7 @@ export function extractPlayerContactBodies(
     });
 
     // B. Shin Capsule (knee -> ankle)
-    const shinRadius = SIM_CONFIG.COLLISION.SHIN_RADIUS;
+    const shinRadius = legDimensions.shinRadius;
     const shinShape = createInsetCapsule(leg.knee, leg.ankle, shinRadius, leg.kneeVel, leg.ankleVel);
     const shinCenter = leg.knee.add(leg.ankle).scale(0.5);
     const shinVel = leg.kneeVel.add(leg.ankleVel).scale(0.5);

@@ -3,6 +3,15 @@ import { Vector3 } from '../math/Vector3';
 
 export type Gait = 'walk' | 'jog' | 'sprint';
 
+export type BallControlMode = 'receive' | 'trap';
+
+/** Intentional first-touch action applied only when the ball physically contacts a boot. */
+export interface BallControlIntent {
+  readonly mode: BallControlMode;
+  /** Restrict the control action to one foot. Omit to allow either foot. */
+  readonly preferredFoot?: FootId;
+}
+
 export interface Intent {
   /** Normalized desired movement direction vector (magnitude in [0, 1]) */
   readonly moveDir: Vector2;
@@ -16,6 +25,8 @@ export interface Intent {
   readonly manualTurn?: number;
   /** Request an intentional controlled ground slide / slide tackle */
   readonly requestSlide?: boolean;
+  /** Cushion a rolling ball when it reaches a reachable boot. */
+  readonly ballControl?: BallControlIntent;
 }
 
 export type FootId = 'left' | 'right';
@@ -28,9 +39,9 @@ export interface StrideState {
   readonly phase: StridePhase;
   /** Progress through current phase [0.0, 1.0] */
   readonly phaseProgress: number;
-  /** Dynamic cadence in strides per second (Hz) */
+  /** Dynamic alternating foot-contact rate in steps per second (Hz) */
   readonly cadence: number;
-  /** Dynamic stride length in meters */
+  /** Estimated COM travel per contact in forward gaits; foot-spacing scale in maneuvering gaits (m) */
   readonly strideLength: number;
   /** World coordinates of the planted cleat on turf (null during flight) */
   readonly plantPosition: Vector2 | null;
@@ -54,6 +65,29 @@ export interface StrideState {
   readonly isDoubleSupport: boolean;
 }
 
+/** Contact-ready 3D foot state consumed by Slice 3 ball and body collisions. */
+export interface FootContactState {
+  readonly position: Vector3;
+  readonly velocity: Vector3;
+  readonly inContact: boolean;
+  readonly isSlipping: boolean;
+  readonly phase: StridePhase;
+  readonly phaseProgress: number;
+  readonly normalLoadN: number;
+}
+
+/** Reduced whole-player contact state; this is not a joint-by-joint rigid body. */
+export interface PlayerContactState {
+  readonly centerOfMass: Vector3;
+  readonly centerOfMassVelocity: Vector3;
+  readonly centerOfMassAcceleration: Vector3;
+  /** Signed support margin in meters (negative means COM projection lies outside the support region). */
+  readonly supportMarginM: number;
+  readonly isSupported: boolean;
+  readonly leftFoot: FootContactState;
+  readonly rightFoot: FootContactState;
+}
+
 export type FootDominance = 'right' | 'left' | 'both';
 
 export interface PlayerFootedness {
@@ -67,10 +101,11 @@ export interface PlayerAttributes {
   readonly weightKg: number;        // Anthropometrics: 65 to 95 kg
   readonly topSpeed: number;        // 0 to 100 -> terminal sprint speed 7.2 to 9.8 m/s
   readonly acceleration: number;    // 0 to 100 -> propulsive GRF 4.8 to 7.5 m/s²
-  readonly agility: number;         // 0 to 100 -> lateral grip 4.5 to 7.0 m/s², turn rate 6.5 to 11.5 rad/s
+  readonly agility: number;         // 0 to 100 -> lateral grip 4.5 to 7.0 m/s², yaw speed up to 5.0-7.5 rad/s at baseline mass
   readonly balance: number;         // 0 to 100 -> COM stability & recovery damping
   readonly strength: number;        // 0 to 100 -> eccentric braking 5.5 to 9.2 m/s²
   readonly stamina: number;         // 0 to 100 -> fatigue resistance
+  readonly firstTouch: number;      // 0 to 100 -> skill cushioning difficult incoming contacts
   readonly footedness: PlayerFootedness;
 }
 
@@ -85,6 +120,7 @@ export const PLAYER_PRESETS: Record<string, PlayerAttributes> = {
     balance: 80,
     strength: 80,
     stamina: 85,
+    firstTouch: 78,
     footedness: { dominantFoot: 'right', weakFootAbility: 0.2 },
   },
   explosive_agilist: {
@@ -97,6 +133,7 @@ export const PLAYER_PRESETS: Record<string, PlayerAttributes> = {
     balance: 95,
     strength: 64,
     stamina: 85,
+    firstTouch: 96,
     footedness: { dominantFoot: 'left', weakFootAbility: 0.8 },
   },
   lengthy_powerhouse: {
@@ -109,6 +146,7 @@ export const PLAYER_PRESETS: Record<string, PlayerAttributes> = {
     balance: 75,
     strength: 96,
     stamina: 90,
+    firstTouch: 84,
     footedness: { dominantFoot: 'left', weakFootAbility: 0.6 },
   },
   speed_demon: {
@@ -121,6 +159,7 @@ export const PLAYER_PRESETS: Record<string, PlayerAttributes> = {
     balance: 84,
     strength: 78,
     stamina: 88,
+    firstTouch: 92,
     footedness: { dominantFoot: 'right', weakFootAbility: 0.8 },
   },
   heavy_anchor: {
@@ -133,6 +172,7 @@ export const PLAYER_PRESETS: Record<string, PlayerAttributes> = {
     balance: 70,
     strength: 92,
     stamina: 82,
+    firstTouch: 70,
     footedness: { dominantFoot: 'right', weakFootAbility: 0.6 },
   },
 };
@@ -298,6 +338,8 @@ export interface PlayerState {
   readonly shoulderAngle: number;   // Arm/shoulder counter-pump angle (radians)
   readonly headYaw: number;         // Head look-ahead yaw relative to torso (radians, axial gaze anticipation)
   readonly verticalBounce: number;  // Vertical COM displacement (meters, + for flight, - for stance impact)
+  /** Simulated COM and 3D foot contact data for Slice 3. Optional for legacy authored fixtures. */
+  readonly contactState?: PlayerContactState;
   readonly footedness: PlayerFootedness; // Footedness profile and weak-foot ability
   readonly cutStatus: CutStatus;    // Live plant-and-cut telemetry
   readonly attributes: PlayerAttributes; // Active physical and biomechanical attributes

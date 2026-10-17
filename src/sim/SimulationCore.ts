@@ -2,10 +2,12 @@ import { Vector2 } from '../math/Vector2';
 import { Vector3 } from '../math/Vector3';
 import { SIM_CONFIG } from './config';
 import { BootZoneId } from './collision/BootZones';
+import { getControlledBootResponse } from './collision/BallControl';
 import { KickIntent, KickSwingController } from './collision/KickSwingController';
 import { ContactBody, extractPlayerContactBodies } from './collision/ContactBody';
 import { ContactManifold, SweptCollisionResolver } from './collision/SweptCollision';
 import { LocomotionSystem } from './locomotion/LocomotionSystem';
+import { buildPlayerContactState } from './locomotion/ContactState';
 import { BallPhysics } from './physics/BallPhysics';
 import { PitchSurface } from './physics/PitchSurface';
 import {
@@ -114,16 +116,16 @@ export class SimulationCore {
         phase: 'stance',
         phaseProgress: 0,
         cadence: 0,
-        strideLength: SIM_CONFIG.STRIDE.STRIDE_LEN_WALK,
+        strideLength: 0,
         plantPosition: null,
         stanceWidth: SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL,
         leftFootPos: new Vector2(
-          initialPosition.x - (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.sin(initialFacing),
-          initialPosition.y + (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.cos(initialFacing)
-        ),
-        rightFootPos: new Vector2(
           initialPosition.x + (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.sin(initialFacing),
           initialPosition.y - (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.cos(initialFacing)
+        ),
+        rightFootPos: new Vector2(
+          initialPosition.x - (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.sin(initialFacing),
+          initialPosition.y + (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.cos(initialFacing)
         ),
         isBraking: false,
         chopStepsRemaining: 0,
@@ -151,8 +153,9 @@ export class SimulationCore {
       pitchFatigueMultiplier: 1.0,
     };
 
-    this.currentState = initialPlayerState;
-    this.previousState = initialPlayerState;
+    const initialContactState = buildPlayerContactState(initialPlayerState, 0, 0, 0, SIM_CONFIG.LOOP.FIXED_DT);
+    this.currentState = { ...initialPlayerState, contactState: initialContactState };
+    this.previousState = this.currentState;
   }
 
   step(intent: Intent, dt: number = SIM_CONFIG.LOOP.FIXED_DT): void {
@@ -268,6 +271,7 @@ export class SimulationCore {
         );
 
         contactManifold = {
+          hasImpact: true,
           body: bodyAtHit,
           toi: earliestHit.toi,
           contactPoint: refined.contactPoint,
@@ -287,7 +291,10 @@ export class SimulationCore {
         ballAtHit.spin,
         this.ball.mass,
         this.ball.inertia,
-        this.ball.radius
+        this.ball.radius,
+        ballAtHit.flightState === 'rolling'
+          ? getControlledBootResponse(intent.ballControl, bodyAtHit, this.currentState.attributes)
+          : null
       );
 
       // Record contact telemetry marker for visualization
@@ -379,11 +386,17 @@ export class SimulationCore {
         phase: 'stance',
         phaseProgress: 0,
         cadence: 0,
-        strideLength: SIM_CONFIG.STRIDE.STRIDE_LEN_WALK,
+        strideLength: 0,
         plantPosition: null,
         stanceWidth: SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL,
-        leftFootPos: position,
-        rightFootPos: position,
+        leftFootPos: new Vector2(
+          position.x + (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.sin(facing),
+          position.y - (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.cos(facing)
+        ),
+        rightFootPos: new Vector2(
+          position.x - (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.sin(facing),
+          position.y + (SIM_CONFIG.STRIDE.STANCE_WIDTH_NORMAL / 2) * Math.cos(facing)
+        ),
         isBraking: false,
         chopStepsRemaining: 0,
         pelvicAngle: 0,
@@ -410,8 +423,9 @@ export class SimulationCore {
       pitchFatigueMultiplier: 1.0,
     };
 
-    this.currentState = resetState;
-    this.previousState = resetState;
+    const resetContactState = buildPlayerContactState(resetState, 0, 0, 0, SIM_CONFIG.LOOP.FIXED_DT);
+    this.currentState = { ...resetState, contactState: resetContactState };
+    this.previousState = this.currentState;
     this.kickController.reset();
 
     const ballPos = new Vector3(
@@ -533,6 +547,7 @@ export class SimulationCore {
 
   requestKickPreset(presetIndex: number, headingRad?: number): { success: boolean; reason?: string } {
     const heading = headingRad ?? this.currentState.facing;
+    const isExplicitHeading = headingRad !== undefined;
     switch (presetIndex) {
       case 1:
         // Preset 1: Ground Pass (14 m/s, 0° elevation, medial inside boot)
@@ -542,6 +557,7 @@ export class SimulationCore {
           headingRad: heading,
           contactZone: 'medial',
           ankleStiffness: 0.85,
+          headingExplicit: isExplicitHeading,
         });
       case 2:
         // Preset 2: Curving Free-Kick (24 m/s, 12° elevation, +7 RPS sidespin curl)
@@ -553,6 +569,7 @@ export class SimulationCore {
           backspinRps: 2.0,
           contactZone: 'medial',
           ankleStiffness: 0.95,
+          headingExplicit: isExplicitHeading,
         });
       case 3:
         // Preset 3: Chipped Lob (16 m/s, 28° elevation, +5.5 RPS backspin lift)
@@ -563,6 +580,7 @@ export class SimulationCore {
           backspinRps: 5.5,
           contactZone: 'toe',
           ankleStiffness: 0.75,
+          headingExplicit: isExplicitHeading,
         });
       case 4:
         // Preset 4: Trivela Curve (22 m/s, 10° elevation, -6 RPS outside curl)
@@ -574,6 +592,7 @@ export class SimulationCore {
           backspinRps: 1.5,
           contactZone: 'lateral',
           ankleStiffness: 0.90,
+          headingExplicit: isExplicitHeading,
         });
       case 5:
         // Preset 5: Knuckleball Strike (28 m/s, 7.5° elevation, dead center laces, 0 spin)
@@ -585,6 +604,7 @@ export class SimulationCore {
           backspinRps: 0,
           contactZone: 'instep',
           ankleStiffness: 1.0,
+          headingExplicit: isExplicitHeading,
         });
       default:
         return { success: false, reason: `Unknown preset index ${presetIndex}` };

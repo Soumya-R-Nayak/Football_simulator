@@ -134,8 +134,8 @@ describe('Wet Ground, Puddle Hydrodynamics & Weather Edge-Case Rigor', () => {
       manualTurn: 0,
     };
 
-    // Accelerate to top sprint speed toward puddle
-    for (let i = 0; i < 180; i++) {
+    // Accelerate to sprint speed toward the puddle before triggering the slide.
+    for (let i = 0; i < 240; i++) {
       sim.step(sprintIntent, SIM_CONFIG.LOOP.FIXED_DT);
     }
 

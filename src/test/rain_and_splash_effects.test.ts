@@ -82,6 +82,7 @@ function createDummyPlayer(overrides: Partial<PlayerState> = {}): PlayerState {
       balance: 80,
       strength: 80,
       stamina: 80,
+      firstTouch: 75,
       footedness: { dominantFoot: 'right', weakFootAbility: 0.5 },
     },
     curveIndex: 0,

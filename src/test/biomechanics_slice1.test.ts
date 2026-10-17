@@ -238,4 +238,182 @@ describe('Biomechanical Enhancements (Items 1-4)', () => {
     expect(f3.dominantFoot).toBe('right');
     expect(f3.weakFootAbility).toBe(0.2);
   });
+
+  it('validates physical footfall frequencies and contact/flight durations across gaits', () => {
+    const dt = SIM_CONFIG.LOOP.FIXED_DT;
+
+    function measureGaitTiming(gait: 'walk' | 'jog' | 'sprint', warmUpSeconds: number, measureSeconds: number) {
+      const sim = new SimulationCore(Vector2.zero(), 0);
+      const intent: Intent = {
+        moveDir: new Vector2(1, 0),
+        faceDir: null,
+        gait,
+        holdFacing: false,
+        manualTurn: 0,
+      };
+
+      for (let t = 0; t < warmUpSeconds; t += dt) sim.step(intent, dt);
+
+      let stepCount = 0;
+      let prevFoot = sim.getCurrentState().stride.currentFoot;
+      let stanceTicks = 0;
+      let flightTicks = 0;
+      let totalTicks = 0;
+
+      for (let t = 0; t < measureSeconds; t += dt) {
+        sim.step(intent, dt);
+        const state = sim.getCurrentState();
+        totalTicks++;
+        if (state.stride.currentFoot !== prevFoot) {
+          stepCount++;
+          prevFoot = state.stride.currentFoot;
+        }
+        if (state.stride.phase === 'stance') stanceTicks++;
+        else flightTicks++;
+      }
+
+      const footfallFreq = stepCount / measureSeconds;
+      const stanceFraction = stanceTicks / totalTicks;
+      const avgStanceDuration = (stanceTicks * dt) / Math.max(1, stepCount);
+      const avgFlightDuration = (flightTicks * dt) / Math.max(1, stepCount);
+
+      return { footfallFreq, stanceFraction, avgStanceDuration, avgFlightDuration, stepCount };
+    }
+
+    // 1. Walk: 1.9-2.4 steps/s from relaxed to fast walking, 100% stance
+    const walk = measureGaitTiming('walk', 1.0, 3.0);
+    expect(walk.footfallFreq).toBeGreaterThanOrEqual(1.7);
+    expect(walk.footfallFreq).toBeLessThanOrEqual(2.5);
+    expect(walk.stanceFraction).toBe(1.0);
+
+    // 2. Jog: roughly 2.4-2.5 steps/s at the 3.8 m/s cap, ~50% stance/flight
+    const jog = measureGaitTiming('jog', 1.5, 3.0);
+    expect(jog.footfallFreq).toBeGreaterThanOrEqual(2.3);
+    expect(jog.footfallFreq).toBeLessThanOrEqual(3.0);
+    expect(jog.stanceFraction).toBeGreaterThan(0.44);
+    expect(jog.stanceFraction).toBeLessThan(0.55);
+    expect(jog.avgStanceDuration).toBeGreaterThan(0.15);
+    expect(jog.avgFlightDuration).toBeGreaterThan(0.15);
+
+    // 3. Sprint: ~4.1-4.3 steps/s, stance ~0.09s, flight >= 0.12s, stance fraction ~37-43%
+    const sprint = measureGaitTiming('sprint', 2.0, 3.0);
+    expect(sprint.footfallFreq).toBeGreaterThanOrEqual(3.8);
+    expect(sprint.footfallFreq).toBeLessThanOrEqual(4.4);
+    expect(sprint.avgStanceDuration).toBeGreaterThanOrEqual(0.088);
+    expect(sprint.avgStanceDuration).toBeLessThanOrEqual(0.105);
+    expect(sprint.avgFlightDuration).toBeGreaterThanOrEqual(0.12);
+    expect(sprint.stanceFraction).toBeGreaterThan(0.35);
+    expect(sprint.stanceFraction).toBeLessThan(0.45);
+  });
+
+  it('transitions smoothly across gaits (walk -> jog -> sprint) with continuous frequency progression', () => {
+    const dt = SIM_CONFIG.LOOP.FIXED_DT;
+    const sim = new SimulationCore(Vector2.zero(), 0);
+
+    let prevFoot = sim.getCurrentState().stride.currentFoot;
+    let walkSteps = 0, jogSteps = 0, sprintSteps = 0;
+
+    // Walk for 2.0s
+    for (let t = 0; t < 2.0; t += dt) {
+      sim.step({ moveDir: new Vector2(1, 0), faceDir: null, gait: 'walk', holdFacing: false, manualTurn: 0 }, dt);
+      if (sim.getCurrentState().stride.currentFoot !== prevFoot) {
+        walkSteps++;
+        prevFoot = sim.getCurrentState().stride.currentFoot;
+      }
+    }
+
+    // Jog for 2.0s
+    for (let t = 0; t < 2.0; t += dt) {
+      sim.step({ moveDir: new Vector2(1, 0), faceDir: null, gait: 'jog', holdFacing: false, manualTurn: 0 }, dt);
+      if (sim.getCurrentState().stride.currentFoot !== prevFoot) {
+        jogSteps++;
+        prevFoot = sim.getCurrentState().stride.currentFoot;
+      }
+    }
+
+    // Sprint for 2.0s
+    for (let t = 0; t < 2.0; t += dt) {
+      sim.step({ moveDir: new Vector2(1, 0), faceDir: null, gait: 'sprint', holdFacing: false, manualTurn: 0 }, dt);
+      if (sim.getCurrentState().stride.currentFoot !== prevFoot) {
+        sprintSteps++;
+        prevFoot = sim.getCurrentState().stride.currentFoot;
+      }
+    }
+
+    // Footstep count over 2s should scale with cadence (walk <= jog < sprint)
+    expect(walkSteps).toBeGreaterThanOrEqual(3);
+    expect(walkSteps).toBeLessThanOrEqual(5); // ~1.9 Hz * 2s ~ 4 steps
+    expect(jogSteps).toBeGreaterThanOrEqual(walkSteps);
+    expect(jogSteps).toBeGreaterThanOrEqual(4);
+    expect(jogSteps).toBeLessThanOrEqual(7); // ~2.8 Hz * 2s ~ 5-6 steps
+    expect(sprintSteps).toBeGreaterThan(jogSteps);
+    // Jog now caps at 3.8 m/s, so the first two sprint seconds include more
+    // acceleration from a lower entry speed and can contain one fewer contact.
+    expect(sprintSteps).toBeGreaterThanOrEqual(6);
+    expect(sprintSteps).toBeLessThanOrEqual(10); // ~4.1 Hz * 2s ~ 8 steps
+  });
+
+  it('isolates ground traction and turf effects from airborne flight during sharp cuts', () => {
+    const dt = SIM_CONFIG.LOOP.FIXED_DT;
+    const sim = new SimulationCore(Vector2.zero(), -Math.PI / 2); // Facing North
+    sim.setTurfCondition('wet_slick'); // Wet slick turf with FG studs where traction ceiling is ~0.61
+
+    const sprintNorth: Intent = {
+      moveDir: new Vector2(0, -1),
+      faceDir: null,
+      gait: 'sprint',
+      holdFacing: false,
+      manualTurn: 0,
+    };
+
+    // Step until player reaches high-speed open flight phase
+    let reachedMidFlight = false;
+    for (let t = 0; t < 2.5; t += dt) {
+      sim.step(sprintNorth, dt);
+      const state = sim.getCurrentState();
+      if (
+        state.velocity.length() > 6.0 &&
+        state.stride.phase === 'flight' &&
+        state.stride.phaseProgress >= 0.20 &&
+        state.stride.phaseProgress <= 0.60
+      ) {
+        reachedMidFlight = true;
+        break;
+      }
+    }
+    expect(reachedMidFlight).toBe(true);
+
+    const flightStateBefore = sim.getCurrentState();
+    expect(flightStateBefore.stride.phase).toBe('flight');
+    const divotsBefore = sim.getPitchSurface().getDivotsNear(flightStateBefore.position, 20.0, 20.0, 0).length;
+
+    // Demand an aggressive 90° cut West while airborne
+    const cutWest: Intent = {
+      moveDir: new Vector2(-1, 0),
+      faceDir: null,
+      gait: 'sprint',
+      holdFacing: false,
+      manualTurn: 0,
+    };
+
+    sim.step(cutWest, dt);
+    const flightStateAfterCut = sim.getCurrentState();
+
+    // 1. Must remain in flight (flight not prematurely aborted by ground wipeout)
+    expect(flightStateAfterCut.stride.phase).toBe('flight');
+
+    // 2. Slip status must remain 'none' (cannot slip on turf while in mid-air)
+    expect(flightStateAfterCut.slipStatus.type).toBe('none');
+    expect(flightStateAfterCut.slipStatus.tractionDemand).toBe(0);
+
+    // 3. Zero divots created while airborne
+    const divotsAfter = sim.getPitchSurface().getDivotsNear(flightStateBefore.position, 20.0, 20.0, 0).length;
+    expect(divotsAfter).toBe(divotsBefore);
+
+    // 4. Acceleration while airborne is strictly ballistic air drag
+    const appliedAcc = flightStateAfterCut.velocity.sub(flightStateBefore.velocity).scale(1 / dt);
+    const speed = flightStateBefore.velocity.length();
+    const expectedDragMag = 0.0035 * speed * speed;
+    expect(appliedAcc.length()).toBeCloseTo(expectedDragMag, 1);
+  });
 });

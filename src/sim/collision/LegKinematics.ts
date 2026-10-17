@@ -1,6 +1,6 @@
 import { Vector2 } from '../../math/Vector2';
 import { Vector3 } from '../../math/Vector3';
-import { SIM_CONFIG } from '../config';
+import { getPlayerLegDimensions, SIM_CONFIG } from '../config';
 import { PlayerState } from '../types';
 
 export interface LegJointPose {
@@ -50,15 +50,28 @@ function evaluateRawPoseAt(
   const playerPos2D = prevState.position.scale(1 - clampedT).add(currState.position.scale(clampedT));
   const facing = prevState.facing + (currState.facing - prevState.facing) * clampedT;
 
-  const hipHeight = SIM_CONFIG.COLLISION.HIP_HEIGHT;
-  const hipOffsetY = SIM_CONFIG.COLLISION.HIP_OFFSET_Y;
-  const thighLen = SIM_CONFIG.COLLISION.THIGH_LEN;
-  const shinLen = SIM_CONFIG.COLLISION.SHIN_LEN;
+  const legDimensions = getPlayerLegDimensions(currState.attributes.heightCm);
+  const hipHeight = legDimensions.hipHeight;
+  const hipOffsetY = legDimensions.hipOffsetY;
+  const thighLen = legDimensions.thighLength;
+  const shinLen = legDimensions.shinLength;
   const footStanceZ = SIM_CONFIG.COLLISION.FOOT_STANCE_Z;
   const footSwingMaxZ = SIM_CONFIG.COLLISION.FOOT_SWING_MAX_Z;
 
   const fwdVec = Vector3.fromVector2(Vector2.fromAngle(facing), 0);
   const latVec = Vector3.fromVector2(Vector2.fromAngle(facing + Math.PI / 2), 0);
+
+  const getFootXY = (isLeft: boolean): Vector2 => {
+    const prevContact = prevState.contactState && (isLeft ? prevState.contactState.leftFoot : prevState.contactState.rightFoot);
+    const currContact = currState.contactState && (isLeft ? currState.contactState.leftFoot : currState.contactState.rightFoot);
+    const prevFoot = prevContact
+      ? new Vector2(prevContact.position.x, prevContact.position.y)
+      : (isLeft ? prevState.stride.leftFootPos : prevState.stride.rightFootPos);
+    const currFoot = currContact
+      ? new Vector2(currContact.position.x, currContact.position.y)
+      : (isLeft ? currState.stride.leftFootPos : currState.stride.rightFootPos);
+    return prevFoot.scale(1 - clampedT).add(currFoot.scale(clampedT));
+  };
 
   // Determine loaded state
   let leftLoaded = false;
@@ -66,7 +79,10 @@ function evaluateRawPoseAt(
 
   const activeStride = currState.stride;
 
-  if (activeStride.isDoubleSupport) {
+  if (currState.contactState) {
+    leftLoaded = currState.contactState.leftFoot.inContact;
+    rightLoaded = currState.contactState.rightFoot.inContact;
+  } else if (activeStride.isDoubleSupport) {
     leftLoaded = true;
     rightLoaded = true;
   } else if (activeStride.phase === 'flight') {
@@ -82,6 +98,19 @@ function evaluateRawPoseAt(
     }
   }
 
+  // The pelvis is not rigidly fixed to the COM marker. During support, allow a
+  // small shared translation toward the support base. This keeps the hip joints
+  // from reaching full leg extension while leaving the planted foot anchor
+  // untouched and preserving a single coherent pelvis for both legs.
+  const supportFeet = [
+    ...(leftLoaded ? [getFootXY(true)] : []),
+    ...(rightLoaded ? [getFootXY(false)] : []),
+  ];
+  const supportCenter = supportFeet.length > 0
+    ? supportFeet.reduce((sum, foot) => sum.add(foot), Vector2.zero()).scale(1 / supportFeet.length)
+    : playerPos2D;
+  const pelvisShift = supportCenter.sub(playerPos2D).clampLength(legDimensions.hipTranslationMax);
+
   // Phase progress across the tick
   let p = (1 - clampedT) * prevState.stride.phaseProgress + clampedT * currState.stride.phaseProgress;
   if (currState.stride.phaseProgress < prevState.stride.phaseProgress) {
@@ -91,11 +120,17 @@ function evaluateRawPoseAt(
   // Helper for single leg IK
   const solveLeg = (isLeft: boolean, loaded: boolean): RawJointPositions => {
     const latSign = isLeft ? -1 : 1;
-    const hipPos = new Vector3(playerPos2D.x, playerPos2D.y, hipHeight).add(latVec.scale(latSign * hipOffsetY));
+    const hipPos2D = playerPos2D.add(pelvisShift).add(new Vector2(latVec.x, latVec.y).scale(latSign * hipOffsetY));
 
     // Stride engine 2D foot position interpolated between prevState and currState
-    const prevFootPos2D = isLeft ? prevState.stride.leftFootPos : prevState.stride.rightFootPos;
-    const currFootPos2D = isLeft ? currState.stride.leftFootPos : currState.stride.rightFootPos;
+    const prevFootContact = prevState.contactState && (isLeft ? prevState.contactState.leftFoot : prevState.contactState.rightFoot);
+    const currFootContact = currState.contactState && (isLeft ? currState.contactState.leftFoot : currState.contactState.rightFoot);
+    const prevFootPos2D = prevFootContact
+      ? new Vector2(prevFootContact.position.x, prevFootContact.position.y)
+      : (isLeft ? prevState.stride.leftFootPos : prevState.stride.rightFootPos);
+    const currFootPos2D = currFootContact
+      ? new Vector2(currFootContact.position.x, currFootContact.position.y)
+      : (isLeft ? currState.stride.leftFootPos : currState.stride.rightFootPos);
 
     let footPos2D: Vector2;
     if (prevState === currState) {
@@ -110,7 +145,10 @@ function evaluateRawPoseAt(
     let footZ = footStanceZ;
     let bootPitch = 0;
 
-    if (loaded) {
+    if (prevFootContact && currFootContact) {
+      footZ = prevFootContact.position.z * (1 - clampedT) + currFootContact.position.z * clampedT;
+      bootPitch = loaded ? 0 : -0.38 * Math.sin(p * Math.PI) + 0.24 * Math.pow(Math.max(0, (p - 0.6) / 0.4), 2);
+    } else if (loaded) {
       footZ = footStanceZ;
       bootPitch = 0;
     } else {
@@ -119,19 +157,35 @@ function evaluateRawPoseAt(
       bootPitch = -0.38 * Math.sin(p * Math.PI) + 0.24 * Math.pow(Math.max(0, (p - 0.6) / 0.4), 2);
     }
 
+    // Dynamic pelvis drop: lower hip joint when foot offset grows horizontally
+    const reachMax = thighLen + shinLen - 0.002;
+    const reachMin = Math.abs(thighLen - shinLen) + 0.02;
+    const dXY = footPos2D.sub(hipPos2D).length();
+    const maxZSpan = Math.sqrt(Math.max(0.01, reachMax * reachMax - dXY * dXY));
+    const baseComHeight = currState.attributes.heightCm / 100 * SIM_CONFIG.PLAYER_BODY.COM_HEIGHT_RATIO;
+    const previousComOffset = prevState.contactState
+      ? prevState.contactState.centerOfMass.z - prevState.attributes.heightCm / 100 * SIM_CONFIG.PLAYER_BODY.COM_HEIGHT_RATIO
+      : prevState.verticalBounce;
+    const currentComOffset = currState.contactState
+      ? currState.contactState.centerOfMass.z - baseComHeight
+      : currState.verticalBounce;
+    const comOffset = previousComOffset * (1 - clampedT) + currentComOffset * clampedT;
+    const dynamicHipZ = Math.min(hipHeight + comOffset, footZ + maxZSpan - 0.002);
+    const hipPos = new Vector3(hipPos2D.x, hipPos2D.y, dynamicHipZ);
+
     let anklePos = new Vector3(footPos2D.x, footPos2D.y, footZ);
 
     // 2-Bone IK to find Knee
     const dVec = anklePos.sub(hipPos);
     const dLen = dVec.length();
-    const reachMax = thighLen + shinLen - 0.005;
-    const reachMin = Math.abs(thighLen - shinLen) + 0.02;
 
     let dClamped = dLen;
     if (dLen > reachMax) {
       dClamped = reachMax;
+      anklePos = hipPos.add(dVec.scale(reachMax / dLen));
     } else if (dLen < reachMin) {
       dClamped = reachMin;
+      anklePos = hipPos.add(dVec.scale(reachMin / dLen));
     }
 
     const legAxis = dVec.scale(1 / Math.max(1e-4, dLen));
@@ -150,8 +204,7 @@ function evaluateRawPoseAt(
 
     const kneePos = hipPos.add(legAxis.scale(thighLen * cosAlpha)).add(kneeNormal.scale(thighLen * sinAlpha));
 
-    // Boot Yaw: follows shank direction unless shank is purely vertical, then follows facing
-    const shankVec = anklePos.sub(kneePos);
+    // Boot Yaw: follows facing
     const bootYaw = facing;
 
     // Boot orientation vector

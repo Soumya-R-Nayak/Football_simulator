@@ -14,12 +14,13 @@ import {
   TURF_PRESETS,
   TurfCondition,
 } from '../types';
+import { buildPlayerContactState } from './ContactState';
 import { StrideEngine } from './StrideEngine';
 
 /**
  * Locomotion System integrating Intent into biomechanically constrained PlayerState.
  * Combines Morin macroscopic acceleration, directional speed envelopes, plant-and-cut
- * turning, torso rotation limits, discrete footstep strides, weak-foot lateral asymmetry,
+ * turning, stance-coupled torso rotation, discrete footstep strides, weak-foot lateral asymmetry,
  * physical player attributes (Pace, Accel, Agility, Balance, Strength), continuous
  * sprint curve shaping (κ in [-0.30, +0.30]), footwear studs (FG vs SG), available turf
  * traction, and biomechanical slipping / wipeout recovery.
@@ -43,6 +44,7 @@ export class LocomotionSystem {
   private cutSettleTimer: number = 0;
   private cutSettleDuration: number = 0;
   private wasCuttingLastFrame: boolean = false;
+  private facingHoldTarget: number | null = null;
 
   constructor(initialPos: Vector2, initialFacing: number) {
     this.strideEngine = new StrideEngine(initialPos, initialFacing);
@@ -114,37 +116,103 @@ export class LocomotionSystem {
 
     // Derived Physical & Kinematic Parameters
     const maxSprintSpeed = 7.40 + 2.50 * (this.attributes.topSpeed / 100);
-    const maxJogSpeed = 0.52 * maxSprintSpeed;
-    const maxWalkSpeed = 2.10;
+    const maxJogSpeed = Math.min(SIM_CONFIG.GAIT_SPEEDS.jog, 0.52 * maxSprintSpeed);
+    const maxWalkSpeed = SIM_CONFIG.GAIT_SPEEDS.walk;
 
-    const maxPropAcc = 6.50 + 3.75 * (this.attributes.acceleration / 100);
+    // Match PlayerAttributes' stated propulsive GRF/mass range and measured soccer
+    // horizontal force-to-mass magnitudes (roughly 6.5-7.0 N/kg in the cited sample).
+    const maxPropAcc = 4.80 + 2.70 * (this.attributes.acceleration / 100);
     const maxBrakeAcc = 6.00 + 3.125 * (this.attributes.strength / 100);
     const maxLatGripBase = 4.50 + 2.50 * (this.attributes.agility / 100);
 
-    // Torso rotational inertia factor based on body mass (standard 75 kg baseline)
+    // Torso rotational limits scale with agility and body inertia (75 kg baseline).
     const inertiaFactor = Math.sqrt(75 / Math.max(50, this.attributes.weightKg));
-    const effectiveOmegaMax =
-      (5.00 + 2.50 * (this.attributes.agility / 100)) * inertiaFactor;
+    const effectiveOmegaMax = SIM_CONFIG.KINEMATICS.OMEGA_MAX *
+      (0.83 + 0.42 * (this.attributes.agility / 100)) * inertiaFactor;
+
+    // Yaw acceleration comes from the planted base. Airborne or slipping players
+    // can still counter-rotate, but have much less ground torque available.
+    const contact = currentState.contactState;
+    const totalFootLoad = contact
+      ? contact.leftFoot.normalLoadN + contact.rightFoot.normalLoadN
+      : 0;
+    const bodyWeightN = this.attributes.weightKg * 9.81;
+    const loadFraction = Math.min(1, totalFootLoad / Math.max(1, bodyWeightN));
+    const supportFactor = contact
+      ? (contact.isSupported ? 0.32 + 0.68 * loadFraction : 0.28)
+      : (currentState.stride.phase === 'flight' ? 0.35 : 0.78);
+    const slipping = currentState.slipStatus.type !== 'none';
+    const slippingLoadShare = contact && totalFootLoad > 0
+      ? ((contact.leftFoot.isSlipping ? contact.leftFoot.normalLoadN : 0) +
+          (contact.rightFoot.isSlipping ? contact.rightFoot.normalLoadN : 0)) / totalFootLoad
+      : 0;
+    const slipFactor = slippingLoadShare > 0
+      ? 1 - 0.70 * Math.min(1, slippingLoadShare)
+      : slipping ? 0.65 : 1.0;
+    const planarAcceleration = contact?.centerOfMassAcceleration;
+    let lateralGripUse = 0;
+    if (planarAcceleration && currentSpeed > 0.5) {
+      const velocityDirection = currentVel.normalize();
+      const lateralDemand = Math.abs(
+        velocityDirection.x * planarAcceleration.y - velocityDirection.y * planarAcceleration.x
+      );
+      lateralGripUse = Math.min(1, lateralDemand / Math.max(0.1, maxLatGripBase));
+    }
+    const gripFactor = 1 - 0.55 * lateralGripUse;
+    const maxYawAcceleration = SIM_CONFIG.KINEMATICS.ALPHA_YAW_MAX *
+      inertiaFactor * supportFactor * slipFactor * gripFactor;
 
     const curveIndex = this.getCurveIndex();
 
-    // 1. Torso Heading Update
-    if (typeof intent.manualTurn === 'number' && intent.manualTurn !== 0) {
-      // Dev-only manual torso turn
-      currentFacing = this.normalizeAngle(
-        currentFacing + intent.manualTurn * effectiveOmegaMax * dt
-      );
-    } else if (!intent.holdFacing && intent.moveDir && intent.moveDir.lengthSq() > 0.01) {
-      // Natural torso alignment tracking movement direction
-      const targetFacing = intent.moveDir.angle();
-      const angleDiff = this.normalizeAngle(targetFacing - currentFacing);
-      const maxTurn = effectiveOmegaMax * dt;
-      const turnAmount = Math.max(-maxTurn, Math.min(maxTurn, angleDiff));
-      currentFacing = this.normalizeAngle(currentFacing + turnAmount);
+    // 1. Torso Heading Update. Use an angular-speed target with a stopping-speed
+    // profile, then accelerate toward it under the torque available from stance.
+    // This preserves angular momentum while avoiding an abrupt snap at the target.
+    let targetAngularVelocity = 0;
+    const manualTurn = typeof intent.manualTurn === 'number' ? intent.manualTurn : 0;
+    let angleDiff = 0;
+    if (manualTurn !== 0) {
+      this.facingHoldTarget = null;
+      const turnInput = Math.max(-1, Math.min(1, manualTurn));
+      targetAngularVelocity = turnInput * effectiveOmegaMax;
+    } else {
+      let targetFacing: number;
+      if (intent.holdFacing) {
+        this.facingHoldTarget ??= currentState.facing;
+        targetFacing = this.facingHoldTarget;
+      } else {
+        this.facingHoldTarget = null;
+        const facingIntent = intent.faceDir ?? intent.moveDir;
+        targetFacing = facingIntent.lengthSq() > 0.01 ? facingIntent.angle() : currentState.facing;
+      }
+      angleDiff = this.normalizeAngle(targetFacing - currentFacing);
+      const stoppingSpeed = Math.sqrt(2 * maxYawAcceleration * Math.abs(angleDiff));
+      targetAngularVelocity = Math.sign(angleDiff) * Math.min(effectiveOmegaMax, stoppingSpeed);
+    }
+
+    const angularVelocity = currentState.angularVelocity;
+    const maxAngularChange = maxYawAcceleration * dt;
+    const angularDelta = Math.max(
+      -maxAngularChange,
+      Math.min(maxAngularChange, targetAngularVelocity - angularVelocity)
+    );
+    let nextAngularVelocity = Math.max(
+      -effectiveOmegaMax,
+      Math.min(effectiveOmegaMax, angularVelocity + angularDelta)
+    );
+    const facingDelta = (angularVelocity + nextAngularVelocity) * 0.5 * dt;
+
+    // For a commanded heading, stop exactly at the target if the final integration
+    // step would cross it. Manual turning intentionally has no fixed target angle.
+    if (manualTurn === 0 && angleDiff !== 0 && Math.sign(facingDelta) === Math.sign(angleDiff) &&
+        Math.abs(facingDelta) >= Math.abs(angleDiff)) {
+      currentFacing = this.normalizeAngle(currentFacing + angleDiff);
+      nextAngularVelocity = 0;
+    } else {
+      currentFacing = this.normalizeAngle(currentFacing + facingDelta);
     }
 
     // 2. Base Speed & Directional Speed Anisotropy
-    let baseGaitSpeed = maxWalkSpeed;
+    let baseGaitSpeed: number = maxWalkSpeed;
     if (intent.gait === 'sprint') {
       baseGaitSpeed = maxSprintSpeed;
     } else if (intent.gait === 'jog') {
@@ -192,7 +260,9 @@ export class LocomotionSystem {
         currentFacing,
         relativeAngle,
         signedTurnAngle,
-        intent.holdFacing
+        intent.holdFacing,
+        currentVel,
+        deltaV.scale(1 / SIM_CONFIG.KINEMATICS.TAU)
       );
 
     // 5. Force & Kinematic Integration
@@ -352,9 +422,15 @@ export class LocomotionSystem {
         }
       }
 
-      let effectiveLongForce = fwdUnit.scale(effectiveLongAcc * forceMultiplier);
+      let effectiveLongForce: Vector2;
       if (!isDemandingMove && currentSpeed > 0) {
         effectiveLongForce = fwdUnit.scale(effectiveLongAcc);
+      } else if (effectiveLongAcc < 0) {
+        // Active braking or cut-scrubbing: force must oppose current velocity; never invert into forward acceleration
+        effectiveLongForce = fwdUnit.scale(effectiveLongAcc * Math.abs(forceMultiplier));
+      } else {
+        // Forward propulsion: early-stance impact dip legitimately retards forward drive
+        effectiveLongForce = fwdUnit.scale(effectiveLongAcc * forceMultiplier);
       }
       const latForce = normalUnit.scale(latAcc * latMultiplier * Math.abs(forceMultiplier));
       finalAcc = effectiveLongForce.add(latForce).add(lateralSwayAcc);
@@ -375,8 +451,9 @@ export class LocomotionSystem {
     }
 
     // 5.5 Biomechanical Traction Demand & Slipping System
-    const demandedAccMag = targetAcc.length();
-    const tractionDemand = demandedAccMag / 9.81;
+    // This center-of-mass model treats targetAcc as the requested step-averaged GRF.
+    // The stance waveform below supplies the instantaneous pulse; avoid classifying its
+    // artificial peak as a slip until per-foot force dynamics are modeled explicitly.
 
     // Available Turf Traction Calculation:
     // Base traction TC_base = 1.25 (typical cleat on dry standard natural turf)
@@ -423,12 +500,26 @@ export class LocomotionSystem {
       rutPenalty *
       fatigueTractionPenalty;
 
+    const isApplyingGroundForce = strideState.phase === 'stance' || strideState.isDoubleSupport;
+    const playerMassKg = Math.max(1, this.attributes.weightKg);
+    const requestedGroundAcc = isApplyingGroundForce ? targetAcc : Vector2.zero();
+    const requestedGroundForceN = requestedGroundAcc.scale(playerMassKg);
+    const tractionDemand = requestedGroundForceN.length() / (playerMassKg * 9.81);
+    const maxGroundForceN = availableTraction * playerMassKg * 9.81;
+    const maxAvailableForce = maxGroundForceN / playerMassKg;
+
     // Hazard Perturbation Impulse (Mechanic 4: Physical lateral micro-deflection on rough ground)
     if (divotsNearby.length > 0 && currentSpeed > 0.8 && strideState.phase === 'stance') {
       const rawPerturb = 0.25;
       const damping = 1.0 - 0.90 * balFactor;
       const perturbSign = divotsNearby[0].id % 2 === 0 ? 1 : -1;
       finalAcc = finalAcc.add(normalUnit.scale(perturbSign * rawPerturb * damping * 8.0));
+    }
+
+    // Coulomb friction bounds the net force the planted foot can transmit, including
+    // perturbations from rough ground. Slip classification uses the step-averaged request.
+    if (isApplyingGroundForce && finalAcc.scale(playerMassKg).length() > maxGroundForceN) {
+      finalAcc = finalAcc.normalize().scale(maxGroundForceN / playerMassKg);
     }
 
     // Check if player requested an intentional controlled ground slide / slide tackle
@@ -520,26 +611,20 @@ export class LocomotionSystem {
       const slideDecel = currentSpeed > 0.15 ? effectiveDecel : 0;
       finalAcc = currentSpeed > 0.15 ? currentVel.normalize().scale(-slideDecel) : Vector2.zero();
     } else {
-      // Check for traction loss when applying high ground reaction force
-      const isApplyingGroundForce =
-        strideState.phase === 'stance' || currentSpeed > 1.2 || isDemandingMove;
-
+      // Ground reaction forces and cleat traction limits apply strictly during foot-ground stance contact
       if (isApplyingGroundForce && tractionDemand > availableTraction) {
-        const slipRatio = tractionDemand / availableTraction;
+        const slipRatio = tractionDemand / Math.max(availableTraction, 1e-6);
         const plantPos = strideState.plantPosition ?? currentState.position;
 
         const tier = pitchSurface ? pitchSurface.getPitchTier() : null;
-        const shearAcc = Math.hypot(longAcc, latAcc);
+        const shearAcc = requestedGroundAcc.length();
         const isTurning = Math.abs(latAcc) > 1.8;
 
-        // In straight-line sprint propulsion (!isTurning), athletes naturally regulate forward thrust
-        // up to the available traction limit without stumbling (Coulomb friction limit).
-        // Only when making an aggressive lateral cut or turning does traction break.
+        // Straight-line propulsion can be self-regulated to the grip ceiling. Material
+        // lateral/cutting demand exceeds that capacity as a contact failure and slips.
         if (!isTurning) {
-          const maxGripForce = availableTraction * 9.81 * 0.98;
-          if (finalAcc.length() > maxGripForce) {
-            finalAcc = finalAcc.normalize().scale(maxGripForce);
-          }
+          const maxGripForce = maxGroundForceN / playerMassKg;
+          if (finalAcc.length() > maxGripForce) finalAcc = finalAcc.normalize().scale(maxGripForce);
           this.slipStatus = {
             type: 'none',
             skidVelocity: Vector2.zero(),
@@ -598,14 +683,12 @@ export class LocomotionSystem {
               isControlled: false,
             };
             // Clamp force to available traction limit
-            const maxAvailableForce = availableTraction * 9.81;
             if (finalAcc.length() > maxAvailableForce) {
               finalAcc = finalAcc.normalize().scale(maxAvailableForce);
             }
           } else {
             // Traction Saturation (Demand within 5% of grip ceiling):
             // Cleats grip up to maximum available traction. No slip status, no stumble, no divot.
-            const maxAvailableForce = availableTraction * 9.81;
             if (finalAcc.length() > maxAvailableForce) {
               finalAcc = finalAcc.normalize().scale(maxAvailableForce);
             }
@@ -627,7 +710,7 @@ export class LocomotionSystem {
         if (pitchSurface) {
           const tier = pitchSurface.getPitchTier();
           const shearThreshold = tier.divotShearThreshold;
-          const maneuverShearAcc = Math.hypot(longAcc, latAcc);
+          const maneuverShearAcc = requestedGroundAcc.length();
 
           if (strideState.phase === 'stance' && isDemandingMove) {
             const plantPos =
@@ -823,12 +906,12 @@ export class LocomotionSystem {
     const footSign = strideState.currentFoot === 'left' ? 1 : -1;
     const shoulderAngle = Math.sin(strideState.phaseProgress * Math.PI) * footSign * armPumpAmp;
 
-    return {
+    const nextState: PlayerState = {
       id: currentState.id,
       position: newPosition,
       velocity: newVelocity,
       facing: currentFacing,
-      angularVelocity: (currentFacing - currentState.facing) / dt,
+      angularVelocity: nextAngularVelocity,
       stamina: newStamina,
       gait: intent.gait ?? 'jog',
       stride: strideState,
@@ -844,6 +927,59 @@ export class LocomotionSystem {
       slipStatus: this.slipStatus,
       pitchFatigueMultiplier,
     };
+
+    // Reduced vertical COM dynamics: stance feet generate a spring-damper ground
+    // reaction, while flight follows gravity. The horizontal model uses the same
+    // force convention below, with mass canceling naturally in Coulomb friction.
+    const comHeightAtRest = this.attributes.heightCm / 100 * SIM_CONFIG.PLAYER_BODY.COM_HEIGHT_RATIO;
+    const currentVerticalOffset = currentState.contactState
+      ? currentState.contactState.centerOfMass.z - comHeightAtRest
+      : currentState.verticalBounce;
+    let verticalVelocity = currentState.contactState?.centerOfMassVelocity.z ?? 0;
+    const hasVerticalSupport = strideState.phase === 'stance' || strideState.isDoubleSupport;
+    const enteredFlight = currentState.stride.phase === 'stance' && strideState.phase === 'flight';
+    if (enteredFlight) {
+      const flightApex = SIM_CONFIG.PLAYER_BODY.VERTICAL_BOUNCE_MAX *
+        Math.max(0.25, Math.min(1, currentSpeed / SIM_CONFIG.GAIT_SPEEDS.sprint));
+      verticalVelocity = Math.max(verticalVelocity, Math.sqrt(2 * 9.81 * flightApex));
+    }
+
+    let verticalOffset = currentVerticalOffset;
+    let verticalAcceleration = -9.81;
+    let totalNormalLoad = 0;
+    if (hasVerticalSupport) {
+      const springFrequency = SIM_CONFIG.PLAYER_BODY.VERTICAL_COM_SPRING_HZ;
+      const dampingRatio = SIM_CONFIG.PLAYER_BODY.VERTICAL_COM_DAMPING_RATIO;
+      const targetOffset = Math.max(-0.12, Math.min(SIM_CONFIG.PLAYER_BODY.VERTICAL_BOUNCE_MAX, effectiveBounce));
+      const requestedVerticalAcceleration = springFrequency * springFrequency * (targetOffset - currentVerticalOffset)
+        - 2 * dampingRatio * springFrequency * verticalVelocity;
+      totalNormalLoad = Math.max(0, Math.min(SIM_CONFIG.PLAYER_BODY.VERTICAL_COM_MAX_SUPPORT_G * playerMassKg * 9.81,
+        playerMassKg * (9.81 + requestedVerticalAcceleration)));
+      verticalAcceleration = totalNormalLoad / playerMassKg - 9.81;
+    }
+
+    verticalVelocity += verticalAcceleration * dt;
+    verticalOffset += verticalVelocity * dt;
+    if (verticalOffset < SIM_CONFIG.PLAYER_BODY.VERTICAL_COM_MIN_OFFSET) {
+      verticalOffset = SIM_CONFIG.PLAYER_BODY.VERTICAL_COM_MIN_OFFSET;
+      if (verticalVelocity < 0) verticalVelocity = 0;
+      if (hasVerticalSupport) {
+        totalNormalLoad = playerMassKg * 9.81;
+        verticalAcceleration = 0;
+      }
+    }
+
+    const contactState = buildPlayerContactState(
+      nextState,
+      verticalOffset,
+      verticalVelocity,
+      verticalAcceleration,
+      dt,
+      currentState,
+      finalAcc
+    );
+
+    return { ...nextState, contactState };
   }
 
   /**
@@ -882,6 +1018,7 @@ export class LocomotionSystem {
 
   reset(position: Vector2, facing: number): void {
     this.strideEngine.reset(position, facing);
+    this.facingHoldTarget = null;
     this.slideStartPos = null;
     this.cutSettleTimer = 0;
     this.cutSettleDuration = 0;

@@ -101,14 +101,17 @@ describe('Physical Attributes and Continuous Sprint Curve Models', () => {
       manualTurn: 0,
     };
 
-    // Accelerate to steady jog
-    for (let t = 0; t < 1.0; t += dt) {
+    // Compare at steady jog speed so height-driven cadence differences are
+    // measured independently of the players' different acceleration curves.
+    for (let t = 0; t < 4.0; t += dt) {
       simShort.step(jogIntent, dt);
       simTall.step(jogIntent, dt);
     }
 
-    const shortStride = simShort.getCurrentState().stride.strideLength;
-    const tallStride = simTall.getCurrentState().stride.strideLength;
+    const shortState = simShort.getCurrentState();
+    const tallState = simTall.getCurrentState();
+    const shortStride = shortState.stride.strideLength;
+    const tallStride = tallState.stride.strideLength;
 
     console.log(`Short (170cm) Stride: ${shortStride.toFixed(3)} m`);
     console.log(`Tall (194cm) Stride:  ${tallStride.toFixed(3)} m`);
@@ -116,6 +119,8 @@ describe('Physical Attributes and Continuous Sprint Curve Models', () => {
     // Taller player must have visibly and measurably longer stride lengths
     expect(tallStride).toBeGreaterThan(shortStride);
     expect(tallStride / shortStride).toBeCloseTo(Math.sqrt(194 / 170), 1);
+    expect(shortStride * shortState.stride.cadence).toBeCloseTo(shortState.velocity.length(), 1);
+    expect(tallStride * tallState.stride.cadence).toBeCloseTo(tallState.velocity.length(), 1);
   });
 
   it('cycles presets deterministically through all 5 archetypes', () => {

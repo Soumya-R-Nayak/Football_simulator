@@ -5,7 +5,7 @@ import { SimulationCore } from '../sim/SimulationCore';
 import { Intent } from '../sim/types';
 
 describe('Headless 40m Sprint Biomechanics Benchmark', () => {
-  it('calibrates 10m split and 40m sprint times to elite football standards', () => {
+  it('keeps sprint output within measured professional football ranges', () => {
     const sim = new SimulationCore(Vector2.zero(), 0);
 
     const sprintIntent: Intent = {
@@ -60,19 +60,21 @@ describe('Headless 40m Sprint Biomechanics Benchmark', () => {
     expect(split10m).not.toBeNull();
     expect(finish40m).not.toBeNull();
 
-    // 10m split standard: 1.70s to 1.95s
+    // The cited male soccer study reports high- and low-change-of-direction groups
+    // averaging 1.83s and 2.26s at 10m, respectively.
     expect(split10m!).toBeGreaterThanOrEqual(1.65);
-    expect(split10m!).toBeLessThanOrEqual(2.05);
+    expect(split10m!).toBeLessThanOrEqual(2.36);
 
-    // 40m finish standard: 4.70s to 5.30s
-    expect(finish40m!).toBeGreaterThanOrEqual(4.65);
-    expect(finish40m!).toBeLessThanOrEqual(5.35);
+    // First-division professional sample: 4.877-5.766s across fast-to-slow groups.
+    expect(finish40m!).toBeGreaterThanOrEqual(4.877);
+    expect(finish40m!).toBeLessThanOrEqual(5.766);
 
     // Peak speed near top sprint speed
     expect(maxSpeed).toBeGreaterThanOrEqual(8.0);
     expect(maxSpeed).toBeLessThanOrEqual(SIM_CONFIG.GAIT_SPEEDS.sprint + 0.5);
 
-    // Confirms multiple discrete footsteps were executed
-    expect(stepCount).toBeGreaterThan(10);
+    // Confirms realistic discrete footsteps were executed (elite 40m sprint takes 18-22 steps)
+    expect(stepCount).toBeGreaterThanOrEqual(16);
+    expect(stepCount).toBeLessThanOrEqual(22);
   });
 });

@@ -394,8 +394,8 @@ export class TelemetryHUD {
     ctx.lineWidth = 1;
 
     const maxGraphSpeed = 10.0; // m/s
-    const speeds = [2.2, 4.8, 9.4];
-    const labels = ['walk', 'jog', 'sprint'];
+    const speeds = [2.2, 3.8, 4.8, 9.4];
+    const labels = ['walk', 'jog', 'run band', 'sprint'];
 
     for (let i = 0; i < speeds.length; i++) {
       const y = h - (speeds[i] / maxGraphSpeed) * h;

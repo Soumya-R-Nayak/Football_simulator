@@ -1,6 +1,7 @@
 import { Vector2 } from '../math/Vector2';
 import { Vector3 } from '../math/Vector3';
 import { ContactBody } from '../sim/collision/ContactBody';
+import { poseAt } from '../sim/collision/LegKinematics';
 import { SIM_CONFIG } from '../sim/config';
 import { PitchSurface } from '../sim/physics/PitchSurface';
 import {
@@ -583,9 +584,12 @@ export class CanvasRenderer {
     const interpFacing = this.interpolateAngle(prevState.facing, currState.facing, alpha);
     const interpVel = prevState.velocity.lerp(currState.velocity, alpha);
 
-    // Interpolate feet positions
-    const leftFoot = prevState.stride.leftFootPos.lerp(currState.stride.leftFootPos, alpha);
-    const rightFoot = prevState.stride.rightFootPos.lerp(currState.stride.rightFootPos, alpha);
+    // Use reachable ankle positions from the same articulated pose used for
+    // collisions. Raw stride targets can temporarily exceed leg reach.
+    const legPoses = poseAt(prevState, currState, alpha, SIM_CONFIG.LOOP.FIXED_DT);
+    const leftFoot = new Vector2(legPoses.left.ankle.x, legPoses.left.ankle.y);
+    const rightFoot = new Vector2(legPoses.right.ankle.x, legPoses.right.ankle.y);
+    const bodyScale = Math.max(0.82, Math.min(1.18, currState.attributes.heightCm / 180));
 
     const isSliding =
       currState.slipStatus.type === 'controlled_slide' || currState.slipStatus.type === 'wipeout';
@@ -740,8 +744,24 @@ export class CanvasRenderer {
       ? (!isLeadLeft ? slideAngle : slideAngle - 1.25)
       : interpFacing;
 
-    this.drawCleat(leftFoot, leftCleatAngle, isLeftPlanted, currState.stride.isBraking, currState.studType);
-    this.drawCleat(rightFoot, rightCleatAngle, isRightPlanted, currState.stride.isBraking, currState.studType);
+    this.drawCleat(
+      leftFoot,
+      isSliding ? leftCleatAngle : legPoses.left.bootYaw,
+      legPoses.left.bootPitch,
+      legPoses.left.ankle.z,
+      isLeftPlanted,
+      currState.studType,
+      bodyScale
+    );
+    this.drawCleat(
+      rightFoot,
+      isSliding ? rightCleatAngle : legPoses.right.bootYaw,
+      legPoses.right.bootPitch,
+      legPoses.right.ankle.z,
+      isRightPlanted,
+      currState.studType,
+      bodyScale
+    );
 
     // 3. Draw Torso Body (with dynamic 3D body banking & pelvic yaw rotation)
     const interpHead = prevState.headOffset.lerp(currState.headOffset, alpha);
@@ -782,18 +802,20 @@ export class CanvasRenderer {
     ctx.save();
     ctx.translate(chestPos.x, chestPos.y);
     ctx.rotate(visualHeading);
+    ctx.scale(bodyScale, bodyScale);
 
     // Torso athletic trapezoid/V-taper:
-    // Front chest reaches +0.21m, Back center reaches -0.23m, Shoulders reach Y = +/- 0.31m at X = -0.03m
+    // Shoulder breadth comes from the player dimensions in config.
+    const shoulderHalfWidth = SIM_CONFIG.PLAYER_BODY.SHOULDER_WIDTH / 2;
     ctx.fillStyle = '#1e3a8a'; // Deep blue athletic jersey
     ctx.strokeStyle = '#60a5fa'; // Light blue seam piping
     ctx.lineWidth = 0.02;
     ctx.beginPath();
-    ctx.moveTo(0.21, 0); // Front chest center
-    ctx.bezierCurveTo(0.21, 0.17, 0.11, 0.31, -0.03, 0.31); // Front to right shoulder
-    ctx.bezierCurveTo(-0.16, 0.31, -0.23, 0.17, -0.23, 0);  // Right shoulder to back center
-    ctx.bezierCurveTo(-0.23, -0.17, -0.16, -0.31, -0.03, -0.31); // Back center to left shoulder
-    ctx.bezierCurveTo(0.11, -0.31, 0.21, -0.17, 0.21, 0);  // Left shoulder to front chest
+    ctx.moveTo(0.19, 0); // Front chest center
+    ctx.bezierCurveTo(0.19, 0.12, 0.48 * shoulderHalfWidth, shoulderHalfWidth, -0.10, shoulderHalfWidth);
+    ctx.bezierCurveTo(-0.14, shoulderHalfWidth, -shoulderHalfWidth, 0.12, -shoulderHalfWidth, 0);
+    ctx.bezierCurveTo(-shoulderHalfWidth, -0.12, -0.14, -shoulderHalfWidth, -0.10, -shoulderHalfWidth);
+    ctx.bezierCurveTo(0.48 * shoulderHalfWidth, -shoulderHalfWidth, 0.19, -0.12, 0.19, 0);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
@@ -802,13 +824,13 @@ export class CanvasRenderer {
     ctx.strokeStyle = '#2563eb';
     ctx.lineWidth = 0.015;
     ctx.beginPath();
-    ctx.moveTo(-0.10, -0.24);
-    ctx.quadraticCurveTo(-0.18, 0, -0.10, 0.24);
+    ctx.moveTo(-0.09, -0.76 * shoulderHalfWidth);
+    ctx.quadraticCurveTo(-0.16, 0, -0.09, 0.76 * shoulderHalfWidth);
     ctx.stroke();
 
     // Squad Number 10 on the back (Posterior, -X) - readable across shoulders
     ctx.save();
-    ctx.translate(-0.155, 0);
+    ctx.translate(-0.14, 0);
     ctx.rotate(Math.PI / 2); // Rotate across shoulders
     ctx.scale(0.01, 0.01);
     ctx.font = '900 20px "Impact", "Arial Black", sans-serif';
@@ -825,9 +847,9 @@ export class CanvasRenderer {
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 0.02;
     ctx.beginPath();
-    ctx.moveTo(0.08, -0.07);
-    ctx.lineTo(0.14, 0); // Points forward into chest
-    ctx.lineTo(0.08, 0.07);
+    ctx.moveTo(0.07, -0.05);
+    ctx.lineTo(0.12, 0); // Points forward into chest
+    ctx.lineTo(0.07, 0.05);
     ctx.stroke();
 
     // Club Crest on Left Breast (+X, -Y)
@@ -835,7 +857,7 @@ export class CanvasRenderer {
     ctx.strokeStyle = '#d97706';
     ctx.lineWidth = 0.008;
     ctx.beginPath();
-    ctx.arc(0.10, -0.12, 0.024, 0, Math.PI * 2);
+    ctx.arc(0.09, -0.09, 0.020, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
@@ -843,7 +865,7 @@ export class CanvasRenderer {
     const interpShoulder = isSliding
       ? 0
       : prevState.shoulderAngle * (1 - alpha) + currState.shoulderAngle * alpha;
-    const armDisplacement = Math.sin(interpShoulder) * 0.14;
+    const armDisplacement = Math.sin(interpShoulder) * 0.12;
 
     ctx.fillStyle = '#1e40af'; // Athletic sleeve color
     ctx.strokeStyle = '#93c5fd';
@@ -853,9 +875,9 @@ export class CanvasRenderer {
     ctx.beginPath();
     ctx.ellipse(
       -armDisplacement,
-      -0.26,
-      0.10,
-      0.065,
+      -shoulderHalfWidth,
+      0.085,
+      0.055,
       interpShoulder,
       0,
       Math.PI * 2
@@ -869,10 +891,10 @@ export class CanvasRenderer {
     ctx.lineWidth = 0.01;
     ctx.beginPath();
     ctx.ellipse(
-      -armDisplacement * 1.3 + 0.05,
-      -0.28,
-      0.045,
-      0.032,
+      -armDisplacement * 1.3 + 0.04,
+      -0.25,
+      0.035,
+      0.026,
       interpShoulder,
       0,
       Math.PI * 2
@@ -887,9 +909,9 @@ export class CanvasRenderer {
     ctx.beginPath();
     ctx.ellipse(
       armDisplacement,
-      0.26,
-      0.10,
-      0.065,
+      shoulderHalfWidth,
+      0.085,
+      0.055,
       -interpShoulder,
       0,
       Math.PI * 2
@@ -903,10 +925,10 @@ export class CanvasRenderer {
     ctx.lineWidth = 0.01;
     ctx.beginPath();
     ctx.ellipse(
-      armDisplacement * 1.3 + 0.05,
-      0.28,
-      0.045,
-      0.032,
+      armDisplacement * 1.3 + 0.04,
+      0.25,
+      0.035,
+      0.026,
       -interpShoulder,
       0,
       Math.PI * 2
@@ -920,7 +942,7 @@ export class CanvasRenderer {
     const sinHeading = Math.sin(visualHeading);
     const localHeadX = headRel.x * cosHeading + headRel.y * sinHeading + 0.04;
     const localHeadY = -headRel.x * sinHeading + headRel.y * cosHeading;
-    const headR = 0.12; // 12 cm radius (24 cm skull diameter)
+    const headR = SIM_CONFIG.PLAYER_BODY.HEAD_RADIUS;
 
     // Item 3: Axial Gaze Precedence (Head turns to look into intended direction ahead of torso)
     const interpHeadYaw = prevState.headYaw * (1 - alpha) + currState.headYaw * alpha;
@@ -993,54 +1015,87 @@ export class CanvasRenderer {
   private drawCleat(
     pos: Vector2,
     facing: number,
+    pitch: number,
+    footHeight: number,
     isPlanted: boolean,
-    isBraking: boolean,
-    studType: StudType = 'fg_plastic'
+    studType: StudType = 'fg_plastic',
+    scale: number = 1
   ): void {
     const ctx = this.ctx;
+
+    // In the top-down view, pitch appears as foreshortening and a separated
+    // ground shadow. Keep the true pose cues subtle so the boot stays sized
+    // consistently with the physical 3D contact shape.
+    const pitchClamped = Math.max(-0.55, Math.min(0.55, pitch));
+    const pitchProjection = Math.cos(pitchClamped);
+    const footLift = Math.max(0, footHeight - SIM_CONFIG.COLLISION.FOOT_STANCE_Z);
+    const liftRatio = Math.min(1, footLift / SIM_CONFIG.COLLISION.FOOT_SWING_MAX_Z);
+
     ctx.save();
     ctx.translate(pos.x, pos.y);
     ctx.rotate(facing);
+    ctx.scale(scale, scale);
 
-    // Turf grip ring when planted
-    if (isPlanted) {
-      if (isBraking) {
-        ctx.strokeStyle = 'rgba(239, 68, 68, 0.85)';
-      } else if (studType === 'sg_metal') {
-        ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)'; // Metallic cyan ring for SG Soft Ground metal studs
-      } else {
-        ctx.strokeStyle = 'rgba(74, 222, 128, 0.85)'; // Emerald ring for FG Firm Ground plastic
-      }
-      ctx.lineWidth = 0.035;
-      ctx.beginPath();
-      ctx.arc(0.04, 0, 0.17, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+    // Soft ground shadow makes toe-up swing and foot clearance readable in
+    // the flat field projection without drawing the shoe as an underside disk.
+    ctx.fillStyle = `rgba(2, 6, 23, ${0.24 - liftRatio * 0.12})`;
+    ctx.beginPath();
+    ctx.ellipse(-Math.sin(pitchClamped) * 0.035, 0.018, 0.125 + liftRatio * 0.025, 0.050 + liftRatio * 0.012, 0, 0, Math.PI * 2);
+    ctx.fill();
 
-    const cleatW = SIM_CONFIG.PLAYER_BODY.CLEAT_WIDTH; // 0.10m
+    // Pitch rotates the foot out of the ground plane; its projected length
+    // shortens, while ankle height and the shadow communicate the lift.
+    ctx.scale(pitchProjection, 1);
+
+    const cleatLength = SIM_CONFIG.PLAYER_BODY.CLEAT_LENGTH;
+    const cleatW = SIM_CONFIG.PLAYER_BODY.CLEAT_WIDTH;
     const halfW = cleatW / 2;
+    const heelBack = -0.34 * cleatLength;
+    const heelFront = -0.22 * cleatLength;
+    const toeBase = 0.40 * cleatLength;
+    // Quadratic control point places the actual rounded toe tip at +0.66 L,
+    // making the heel-to-toe extent match the configured 26 cm boot length.
+    const toeTip = 0.92 * cleatLength;
 
-    // Boot body: rounded heel at -X (-0.08m), tapered toe at +X (+0.18m)
+    // Outsole / sidewall silhouette.
     ctx.fillStyle = isPlanted ? '#0f172a' : '#334155';
     ctx.strokeStyle = '#475569';
-    ctx.lineWidth = 0.012;
+    ctx.lineWidth = 0.010;
     ctx.beginPath();
-    ctx.moveTo(-0.06, -halfW);
-    // Heel curve
-    ctx.quadraticCurveTo(-0.09, 0, -0.06, halfW);
-    // Outer edge to toe
-    ctx.lineTo(0.10, halfW);
-    // Tapered rounded toe box
-    ctx.quadraticCurveTo(0.18, 0, 0.10, -halfW);
+    ctx.moveTo(heelFront, -halfW * 0.72);
+    ctx.quadraticCurveTo(heelBack, 0, heelFront, halfW * 0.72);
+    ctx.lineTo(toeBase, halfW);
+    ctx.quadraticCurveTo(toeTip, 0, toeBase, -halfW);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
+    // Upper vamp panel sits inside the outsole. This gives the foot a shoe-top
+    // surface, rather than making the entire object read as a flat sole.
+    ctx.fillStyle = isPlanted ? '#475569' : '#64748b';
+    ctx.beginPath();
+    ctx.moveTo(-0.12 * cleatLength, -halfW * 0.47);
+    ctx.quadraticCurveTo(0.08 * cleatLength, -halfW * 0.62, 0.31 * cleatLength, -halfW * 0.38);
+    ctx.lineTo(0.39 * cleatLength, halfW * 0.38);
+    ctx.quadraticCurveTo(0.08 * cleatLength, halfW * 0.62, -0.12 * cleatLength, halfW * 0.47);
+    ctx.closePath();
+    ctx.fill();
+
+    // Heel counter and its rear edge provide a clear heel-to-toe orientation cue.
+    ctx.fillStyle = isPlanted ? '#1e293b' : '#475569';
+    ctx.beginPath();
+    ctx.moveTo(-0.27 * cleatLength, -halfW * 0.46);
+    ctx.quadraticCurveTo(-0.12 * cleatLength, -halfW * 0.56, -0.02 * cleatLength, -halfW * 0.42);
+    ctx.lineTo(-0.02 * cleatLength, halfW * 0.42);
+    ctx.quadraticCurveTo(-0.12 * cleatLength, halfW * 0.56, -0.27 * cleatLength, halfW * 0.46);
+    ctx.closePath();
+    ctx.fill();
+
     // White toe strike zone / toe cap (Anterior, +X)
     ctx.fillStyle = isPlanted ? '#f8fafc' : '#cbd5e1';
     ctx.beginPath();
-    ctx.moveTo(0.06, -halfW * 0.9);
-    ctx.quadraticCurveTo(0.17, 0, 0.06, halfW * 0.9);
+    ctx.moveTo(toeBase * 0.55, -halfW * 0.9);
+    ctx.quadraticCurveTo(toeTip * 0.94, 0, toeBase * 0.55, halfW * 0.9);
     ctx.closePath();
     ctx.fill();
 
@@ -1048,10 +1103,10 @@ export class CanvasRenderer {
     if (isPlanted) {
       ctx.fillStyle = studType === 'sg_metal' ? '#e2e8f0' : '#0284c7';
       ctx.beginPath();
-      ctx.arc(-0.04, -halfW * 0.5, 0.012, 0, Math.PI * 2);
-      ctx.arc(-0.04, halfW * 0.5, 0.012, 0, Math.PI * 2);
-      ctx.arc(0.08, -halfW * 0.5, 0.012, 0, Math.PI * 2);
-      ctx.arc(0.08, halfW * 0.5, 0.012, 0, Math.PI * 2);
+      ctx.arc(-0.14 * cleatLength, -halfW * 0.5, 0.010, 0, Math.PI * 2);
+      ctx.arc(-0.14 * cleatLength, halfW * 0.5, 0.010, 0, Math.PI * 2);
+      ctx.arc(0.30 * cleatLength, -halfW * 0.5, 0.010, 0, Math.PI * 2);
+      ctx.arc(0.30 * cleatLength, halfW * 0.5, 0.010, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -1059,10 +1114,10 @@ export class CanvasRenderer {
     ctx.strokeStyle = '#94a3b8';
     ctx.lineWidth = 0.008;
     ctx.beginPath();
-    ctx.moveTo(0.01, -halfW * 0.5);
-    ctx.lineTo(0.01, halfW * 0.5);
-    ctx.moveTo(0.035, -halfW * 0.5);
-    ctx.lineTo(0.035, halfW * 0.5);
+    ctx.moveTo(0.04 * cleatLength, -halfW * 0.5);
+    ctx.lineTo(0.04 * cleatLength, halfW * 0.5);
+    ctx.moveTo(0.14 * cleatLength, -halfW * 0.5);
+    ctx.lineTo(0.14 * cleatLength, halfW * 0.5);
     ctx.stroke();
 
     ctx.restore();

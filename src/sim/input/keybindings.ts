@@ -140,6 +140,9 @@ export class KeyboardInputManager {
 
     const holdFacing = this.heldKeys.has(KEY_CODES.HOLD_FACING);
     const requestSlide = this.heldKeys.has(KEY_CODES.RESERVED_E);
+    const ballControl = this.heldKeys.has(KEY_CODES.RESERVED_R)
+      ? { mode: 'receive' as const }
+      : undefined;
 
     let manualTurn = 0;
     if (this.heldKeys.has(KEY_CODES.DEV_TURN_LEFT)) manualTurn -= 1;
@@ -152,6 +155,7 @@ export class KeyboardInputManager {
       holdFacing,
       manualTurn,
       requestSlide,
+      ballControl,
     };
   }
 }
